@@ -1,6 +1,8 @@
 name: Build TaiXuDev APK
 
 on:
+  push:
+    branches: ['feature/ai-superuser-config']
   workflow_dispatch:
     inputs:
       release_tag:
