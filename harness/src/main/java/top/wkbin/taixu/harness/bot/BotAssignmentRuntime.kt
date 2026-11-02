@@ -206,6 +206,7 @@ class BotAssignmentRuntime(
         sendIndependentMemberMessage(repository, groups, sessions, sourceSession, targetAssignmentId, text, messageId) { target, group, body, key ->
             continueTask(target, group, body, key)
         }
+    suspend fun memberDirectory(sessionId: String): String = independentMemberDirectory(repository, groups, sessionId)
     suspend fun history(id: String) = repository.requestsFor(id)
     suspend fun taskForSession(sessionId: String) = repository.assignmentForSession(sessionId)
     suspend fun report(sessionId: String, reason: String?, artifacts: List<String>) = repository.reportBlock(sessionId, reason, artifacts)

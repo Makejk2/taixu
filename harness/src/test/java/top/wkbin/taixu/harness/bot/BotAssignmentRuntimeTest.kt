@@ -388,6 +388,8 @@ class BotAssignmentRuntimeTest {
         withTimeout(10000) { senderEntered.await() }
         b = engine.create("peer", "group", "chief", "parent", "ready-b")
         withTimeout(10000) { receiverEntered.await(); engine.awaitTask(b.id) }
+        assertTrue(engine.memberDirectory(a.sessionId!!).contains(b.id))
+        assertFalse(engine.memberDirectory(a.sessionId!!).contains("ready-b"))
         control.cancel("parent")
         val key = engine.sendMemberMessage(a.sessionId!!, b.id, "A shares findings while working", "findings-1")
         assertEquals(key, engine.sendMemberMessage(a.sessionId!!, b.id, "A shares findings while working", "findings-1"))

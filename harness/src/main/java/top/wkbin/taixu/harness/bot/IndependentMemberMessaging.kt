@@ -6,7 +6,6 @@ import kotlinx.serialization.json.*
 import top.wkbin.taixu.core.database.HarnessSessionRepository
 import top.wkbin.taixu.core.database.repository.BotAssignmentRepository
 import top.wkbin.taixu.core.database.repository.GroupChatRepository
-import top.wkbin.taixu.core.model.bot.BotAssignmentRequest
 import top.wkbin.taixu.core.model.bot.BotAssignmentStatus
 
 /** Envelopes are constructed by native code. Peer text is data, not user approval or system policy. */
@@ -59,4 +58,25 @@ internal suspend fun sendIndependentMemberMessage(
         Json.parseToJsonElement(request.instruction).jsonObject["sourceAssignmentId"]?.jsonPrimitive?.content == source.id
     }.getOrDefault(false) } < 8) { "本任务已发送8条同伴消息，请汇报进展而非继续循环" }
     return enqueue(targetId, groupId, envelope, requestId)
+}
+
+/** Peer discovery exposes routing metadata only, never a colleague's private task history. */
+internal suspend fun independentMemberDirectory(tasks: BotAssignmentRepository, groups: GroupChatRepository, sourceSession: String): String {
+    val source = requireNotNull(tasks.assignmentForSession(sourceSession)) { "仅独立成员任务可查询同伴收件目录" }
+    require(source.independent && source.status == BotAssignmentStatus.RUNNING) { "来源成员任务未在运行" }
+    val groupId = requireNotNull(source.groupId)
+    val group = requireNotNull(groups.getGroup(groupId)) { "团队群已删除" }
+    val binding = group.teamGroupId?.let { "$it@${group.teamVersion}" }
+    require(source.teamBinding == binding) { "团队版本已变化" }
+    val members = groups.getMembers(groupId).map { it.id }.toSet()
+    require(source.botId in members) { "来源成员已移出团队" }
+    return buildJsonArray {
+        tasks.observeForGroup(groupId).first().filter {
+            it.independent && it.botId != source.botId && it.botId in members && it.teamBinding == binding &&
+                it.status !in setOf(BotAssignmentStatus.CANCELLED, BotAssignmentStatus.FAILED, BotAssignmentStatus.INTERRUPTED)
+        }.take(100).forEach { row -> add(buildJsonObject {
+            put("assignment_id", row.id); put("member_id", row.botId); put("member_name", row.botName)
+            put("status", row.status.name)
+        }) }
+    }.toString()
 }
