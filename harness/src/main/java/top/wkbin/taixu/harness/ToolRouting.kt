@@ -94,6 +94,7 @@ internal class ToolRouting(
             // 内建服务转发（记忆/计划/草稿、子智能体、构建脚本、渲染面）统一委托 HarnessServiceToolBackend。
             HarnessTool.MEMORY to service,
             HarnessTool.PLAN to service,
+            HarnessTool.APP_CONFIG to { error("app_config must pass the dedicated native approval gate") },
             HarnessTool.SCRATCHPAD to service,
             HarnessTool.SUBAGENT to service,
             HarnessTool.BUILD_SCRIPT to service,

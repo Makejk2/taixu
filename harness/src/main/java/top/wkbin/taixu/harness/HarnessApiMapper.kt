@@ -46,6 +46,7 @@ internal object HarnessApiMapper {
             lower == "download" -> HarnessTool.DOWNLOAD
             lower == "search_web" -> HarnessTool.SEARCH_WEB
             lower == "memory" -> HarnessTool.MEMORY
+            lower == "app_config" -> HarnessTool.APP_CONFIG
             lower == "plan" -> HarnessTool.PLAN
             lower == "scratchpad" -> HarnessTool.SCRATCHPAD
             lower == "history.search" || lower == "history_search" -> HarnessTool.HISTORY_SEARCH
@@ -73,6 +74,7 @@ internal object HarnessApiMapper {
         HarnessTool.DOWNLOAD -> "download"
         HarnessTool.SEARCH_WEB -> "search_web"
         HarnessTool.MEMORY -> "memory"
+        HarnessTool.APP_CONFIG -> "app_config"
         HarnessTool.PLAN -> "plan"
         HarnessTool.SCRATCHPAD -> "scratchpad"
         HarnessTool.HISTORY_SEARCH -> "history_search"

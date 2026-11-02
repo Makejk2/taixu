@@ -17,6 +17,21 @@ class ApprovalPolicyEngineTest {
     }
 
     @Test
+    fun `app config apply stays critical in every approval mode and PLAN is read only`() {
+        ApprovalMode.entries.forEach { mode ->
+            val decision = policy.decide(mode, HarnessTool.APP_CONFIG, args("action" to "apply"), workspace)
+            assertTrue(decision.required)
+            assertEquals("critical", decision.riskLevel)
+        }
+        listOf("list", "get", "grants").forEach { action ->
+            assertEquals(null, policy.planBlock(HarnessTool.APP_CONFIG, args("action" to action)))
+        }
+        listOf("propose", "apply", "rollback", "revoke").forEach { action ->
+            assertTrue(policy.planBlock(HarnessTool.APP_CONFIG, args("action" to action)) != null)
+        }
+    }
+
+    @Test
     fun `request mode allows read but gates state changing and external tools`() {
         assertFalse(policy.decide(ApprovalMode.REQUEST, HarnessTool.READ, args("path" to "a.txt"), workspace).required)
         assertTrue(policy.decide(ApprovalMode.REQUEST, HarnessTool.WRITE, args("path" to "a.txt", "content" to "x"), workspace).required)

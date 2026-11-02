@@ -79,6 +79,7 @@ class ToolExecutor(
     workspaceToolBackend: WorkspaceToolBackend? = null,
     private val governanceGuard: top.wkbin.taixu.harness.bot.GroupGovernanceGuard? = null,
     private val environments: top.wkbin.taixu.harness.environment.SessionExecutionEnvironments? = null,
+    private val appConfigBackend: top.wkbin.taixu.harness.config.AppConfigToolBackend? = null,
 ) {
     private val mutationSnapshots = WorkspaceMutationSnapshots(checkpointStore, eventBus)
     private val workspaceTools = workspaceToolBackend ?: WorkspaceToolBackend(
@@ -143,6 +144,13 @@ class ToolExecutor(
         operationId: String? = null,
     ): ToolResult {
         val now = System.currentTimeMillis()
+        if (toolCall.tool == HarnessTool.APP_CONFIG) {
+            return top.wkbin.taixu.harness.config.executeAppConfig(
+                appConfigBackend, approvalPolicyEngine,
+                { id -> sessionDao?.findById(id)?.runMode?.let(RunMode::fromId) },
+                toolCall, sessionId, bypassApproval, now,
+            ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }
+        }
         // ask_user 是向用户提问的动作本身，不走审批门控（策略引擎对它亦豁免）：
         // 委托 AskUserToolBackend 走提问生命周期——落一条 pending 请求（复用审批请求的
         // 暂停/恢复管道）并返回 awaitingApproval 让整轮暂停；UI 渲染问题卡，答案由
@@ -185,7 +193,7 @@ class ToolExecutor(
                 // 「本会话内记住」授权表豁免：用户此前对该操作类别批准过并勾选了记住，
                 // 同类后续操作免审批直接执行。表只存内存、随会话销毁，无永久授权；
                 // 只豁免本条 required 判定，策略引擎的其余约束不受影响。
-                val grantedBySession = decision.required &&
+                val grantedBySession = decision.required && decision.riskLevel != "critical" &&
                     sessionApprovalGrants != null &&
                     sessionApprovalGrants.isGranted(
                         sessionId = sessionId,
@@ -199,51 +207,7 @@ class ToolExecutor(
                     toolCall.args.toString(), decision.riskLevel,
                 )
                 if (decision.required && !grantedBySession) {
-                    if (!allowApprovalRequest) {
-                        // 后台 Lane 没有可暂停的审批 UI，只能结构化交接：标记 approvalDeferred，
-                        // 由 Lane 收集成待办上交父智能体。若只回一句失败文字，模型下一轮会输出
-                        // "已交由主智能体"，而那句话曾被当成完成结论。
-                        approvalAuditor?.deferred(
-                            sessionId, toolCall.id,
-                            toolCall.rawToolName ?: toolCall.tool.name.lowercase(),
-                            decision.riskLevel, decision.reason,
-                        )
-                        return ToolResult(
-                            id = UUID.randomUUID().toString(),
-                            createdAt = now,
-                            toolCallId = toolCall.id,
-                            success = false,
-                            output = buildString {
-                                append("该工具需要用户审批（${decision.summary}），子智能体后台 Lane 不支持暂停审批，本次调用未执行。")
-                                append("\n原因：").append(decision.reason)
-                                append("\n请不要重试同一调用，也不要声称已完成：把该操作作为待办写进结论，")
-                                append("由主智能体在主会话重新发起并等待用户批准。")
-                            },
-                            approvalDeferred = true,
-                        )
-                    }
-                    checkNotNull(repository) { "审批仓库未初始化" }
-                    val request = approvalPolicyEngine.createRequest(sessionId, toolCall, workspace, decision, operationId)
-                    repository.create(request)
-                    eventBus?.emit(
-                        HarnessEvent.ApprovalRequested(
-                            sessionId = sessionId,
-                            timestamp = now,
-                            operationId = operationId,
-                            approvalRequestId = request.id,
-                            toolName = request.toolName,
-                            riskLevel = request.riskLevel,
-                        ),
-                    )
-                    return ToolResult(
-                        id = UUID.randomUUID().toString(),
-                        createdAt = now,
-                        toolCallId = toolCall.id,
-                        success = false,
-                        output = "等待用户批准：${decision.summary}\n${decision.reason}",
-                        awaitingApproval = true,
-                        approvalRequestId = request.id,
-                    )
+                    return requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now)
                 }
             }
             executeTool(toolCall.tool, toolCall.args, toolCall.rawToolName, toolCall.id, sessionId, workspace, progressReporter, operationId, toolMetadata, allowApprovalRequest)
@@ -284,6 +248,21 @@ class ToolExecutor(
             metadata = toolMetadata.toMap(),
             imageDataUrl = imagePayload,
         )
+    }
+
+    private suspend fun requestApproval(
+        toolCall: ToolCall, sessionId: String, workspace: String, decision: ApprovalDecision,
+        operationId: String?, allowApprovalRequest: Boolean, now: Long,
+    ): ToolResult = top.wkbin.taixu.harness.approval.requestNativeApproval(
+        approvalRepository, approvalPolicyEngine, approvalAuditor, eventBus,
+        toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now,
+    )
+
+    /** Clear process-local grants when the native session is deleted. */
+    suspend fun revokeAppConfigSession(sessionId: String) {
+        appConfigBackend?.execute(sessionId, kotlinx.serialization.json.buildJsonObject {
+            put("action", kotlinx.serialization.json.JsonPrimitive("revoke"))
+        })
     }
 
     /**

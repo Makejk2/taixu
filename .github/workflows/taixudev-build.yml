@@ -64,6 +64,22 @@ jobs:
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
 
+      - name: Run Debug Unit Tests
+        env:
+          TAIXU_DEV_BUILD: "1"
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Upload Unit Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: taixudev-unit-tests
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Build TaiXuDev APK
         env:
           TAIXU_DEV_BUILD: "1"
@@ -75,6 +91,10 @@ jobs:
           mkdir -p output
           APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
           if [ -f "$APK_PATH" ]; then
+            AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n 1)
+            "$AAPT" dump badging "$APK_PATH" > output/apk-badging.txt
+            grep -q "package: name='top.wkbin.taixu.dev'" output/apk-badging.txt
+            grep -q "application-label:'TaiXuDev'" output/apk-badging.txt
             cp "$APK_PATH" output/TaiXuDev-arm64-debug.apk
             sha256sum output/TaiXuDev-arm64-debug.apk > output/TaiXuDev-arm64-debug.apk.sha256
             echo "APK ready: output/TaiXuDev-arm64-debug.apk"

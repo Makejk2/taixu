@@ -13,15 +13,12 @@ import java.util.UUID
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.security.MessageDigest
-
-
 data class ApprovalDecision(
     val required: Boolean,
     val riskLevel: String = "low",
     val reason: String = "",
     val summary: String = "",
 )
-
 /** Host-side policy. The model prompt is deliberately not part of this decision. */
 class ApprovalPolicyEngine(
     private val pathResolver: HarnessPathResolver,
@@ -34,6 +31,7 @@ class ApprovalPolicyEngine(
         rawToolName: String? = null,
         annotations: McpToolAnnotations? = null,
     ): ApprovalDecision {
+        if (tool == HarnessTool.APP_CONFIG) return top.wkbin.taixu.harness.config.appConfigApproval(args)
         // 宿主特权命令作用于真实 Android 系统。只读操作始终放行；
         // 完全访问 = 用户显式授权一切宿主操作（含 exec / 卸载应用），全部自动放行；
         // ASSISTED 下 GUI 感知/触控（screen_* / app_launch）自动放行——否则工作流智能体节点
@@ -144,6 +142,8 @@ class ApprovalPolicyEngine(
         args: JsonObject,
         rawToolName: String? = null,
     ): String? = when (tool) {
+        HarnessTool.APP_CONFIG -> if (args["action"]?.jsonPrimitive?.content in setOf("list", "get", "grants")) null else "app_config 在 PLAN 中仅允许 list/get/grants。"
+
         // 只读检索与元操作：全放
         HarnessTool.READ, HarnessTool.MEMORY, HarnessTool.PLAN, HarnessTool.SCRATCHPAD,
         HarnessTool.HISTORY_SEARCH, HarnessTool.HISTORY_READ, HarnessTool.LOAD_RULE,

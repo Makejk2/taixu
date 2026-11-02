@@ -408,7 +408,7 @@ internal fun toolIcon(tool: HarnessTool): RuntimeIconName = when (tool) {
     HarnessTool.DOWNLOAD -> RuntimeIconName.Download
     HarnessTool.SEARCH_WEB -> RuntimeIconName.Globe
     HarnessTool.MEMORY -> RuntimeIconName.Bookmark
-    HarnessTool.PLAN -> RuntimeIconName.Checklist
+    HarnessTool.PLAN, HarnessTool.APP_CONFIG -> RuntimeIconName.Checklist
     HarnessTool.SCRATCHPAD -> RuntimeIconName.StickyNote
     HarnessTool.HISTORY_SEARCH -> RuntimeIconName.Search
     HarnessTool.HISTORY_READ -> RuntimeIconName.History

@@ -45,6 +45,7 @@ internal fun toolName(tool: HarnessTool, rawToolName: String? = null): String =
         HarnessTool.DOWNLOAD -> "download"
         HarnessTool.SEARCH_WEB -> "search_web"
         HarnessTool.MEMORY -> "memory"
+        HarnessTool.APP_CONFIG -> "app_config"
         HarnessTool.PLAN -> "plan"
         HarnessTool.SCRATCHPAD -> "scratchpad"
         HarnessTool.HISTORY_SEARCH -> "history.search"

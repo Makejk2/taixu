@@ -536,6 +536,7 @@ class HarnessLoop(
         runCatching { feedbackService?.deleteForSession(id) }
         backgroundSubagents?.cancelForSession(id)
         sessionApprovalGrants.revokeSession(id)
+        toolExecutor.revokeAppConfigSession(id)
         agentTaskStateMachine.deleteForSession(id)
         sessionDao.deleteSession(id)
         rewindController.dropSession(id)

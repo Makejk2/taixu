@@ -983,6 +983,15 @@ class ProviderClient internal constructor(
             ),
             ApiToolDefinition(
                 function = ApiFunctionDefinition(
+                    name = "app_config",
+                    description = "受控应用配置：只支持真实主题、动态取色、应用字体比例、终端字号和触觉反馈。list/get/grants 只读。propose 必须给 key/value/reason，返回不可变 changeId；apply 仅传 changeId，通过原生用户审批后写入。授权绑定当前会话/单键/TTL，高风险每次确认。revoke 撤销当前会话单键或全部授权。rollback 用成功 changeId 和 reason 创建恢复提案，再 apply；禁止模型指定恢复值。权限设置只能生成提议并提示用户手动操作，模型不能授权自己。",
+                    parameters = Json.parseToJsonElement(
+                        """{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["list","get","propose","apply","rollback","grants","revoke"]},"key":{"type":"string"},"value":{"type":"string"},"reason":{"type":"string","maxLength":500},"changeId":{"type":"string"},"ttl_seconds":{"type":"integer","minimum":60,"maximum":1800}},"required":["action"]}""",
+                    ).jsonObject,
+                ),
+            ),
+            ApiToolDefinition(
+                function = ApiFunctionDefinition(
                     name = "plan",
                     description = "结构化多步骤任务规划管理：拆解长任务子步骤并持续跟踪推进进度。当任务预计需要 3 次以上工具调用、存在多个相互依赖的执行阶段、失败后需要分支排查，或会修改多个文件/系统状态时，第一轮工具调用先 replace_active 建立规划，每步完成后 advance；简单单步或双步任务不要建 plan。详细规则见 workflow 规则块（未注入时可用 load_rule 获取）。支持 action: replace_active, get_active, advance, clear_active。",
                     parameters = Json.parseToJsonElement(

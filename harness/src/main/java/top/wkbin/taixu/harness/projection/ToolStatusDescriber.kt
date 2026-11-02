@@ -46,6 +46,7 @@ object ToolStatusDescriber {
         HarnessTool.WRITE -> arg(args, "path")?.let { "写入文件：${it.takeLast(MAX_STATUS_ARG_LENGTH)}" } ?: "写入文件"
         HarnessTool.EDIT -> arg(args, "path")?.let { "编辑文件：${it.takeLast(MAX_STATUS_ARG_LENGTH)}" } ?: "编辑文件"
         HarnessTool.MEMORY -> "正在存取长期记忆：${arg(args, "key") ?: arg(args, "action") ?: "memory"}"
+        HarnessTool.APP_CONFIG -> "正在处理受控应用配置"
         HarnessTool.PLAN -> "正在更新任务执行规划：${arg(args, "goal") ?: arg(args, "action") ?: "plan"}"
         HarnessTool.SCRATCHPAD -> "正在记录工作草稿便签：${arg(args, "key") ?: arg(args, "action") ?: "scratchpad"}"
         HarnessTool.HISTORY_SEARCH -> "正在检索历史消息：${arg(args, "query")?.take(MAX_STATUS_ARG_LENGTH).orEmpty()}"

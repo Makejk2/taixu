@@ -73,6 +73,7 @@ private fun toolStepTitle(call: ToolCall): String = when (call.tool) {
         HarnessTool.DOWNLOAD -> R.string.chat_action_download
         HarnessTool.SEARCH_WEB -> R.string.chat_action_search_web
         HarnessTool.MEMORY -> R.string.chat_action_memory
+        HarnessTool.APP_CONFIG -> R.string.chat_action_app_config
         HarnessTool.PLAN -> R.string.chat_action_plan
         HarnessTool.SCRATCHPAD -> R.string.chat_action_scratchpad
         HarnessTool.HISTORY_SEARCH -> R.string.chat_action_search
