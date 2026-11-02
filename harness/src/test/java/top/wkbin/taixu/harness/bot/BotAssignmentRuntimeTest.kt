@@ -353,6 +353,69 @@ class BotAssignmentRuntimeTest {
         assertEquals(parent.id, tasks.batchAssignments("inner").single().parentAssignmentId)
     }
 
+    @Test fun `members exchange durable messages while sender runs and parent conversation stops`() = runBlocking {
+        seed()
+        val member = db.personaBotDao().findById("member")!!
+        db.personaBotDao().upsert(member.copy(id = "peer", name = "Peer", sessionId = "peer-dm"))
+        groups.addMember("group", "peer", 2)
+        val senderEntered = CompletableDeferred<Unit>()
+        val senderRelease = CompletableDeferred<Unit>()
+        val receiverEntered = CompletableDeferred<Unit>()
+        val received = CompletableDeferred<Unit>()
+        val returned = CompletableDeferred<Unit>()
+        lateinit var a: BotAssignment
+        lateinit var b: BotAssignment
+        lateinit var engine: BotAssignmentRuntime
+        engine = runtime { task, request, admitted ->
+            val sid = requireNotNull(task.sessionId)
+            val accepted = control.submit(sid, request.instruction) as PromptSubmission.Accepted
+            admitted(accepted.taskId)
+            when {
+                request.instruction == "hold-a" -> { senderEntered.complete(Unit); senderRelease.await() }
+                request.instruction == "ready-b" -> receiverEntered.complete(Unit)
+                task.botId == "peer" && request.id.startsWith("peer:") -> {
+                    assertFalse("Source must still be working", senderRelease.isCompleted)
+                    assertEquals(BotAssignmentStatus.RUNNING, tasks.get(a.id)!!.status)
+                    received.complete(Unit)
+                    engine.sendMemberMessage(sid, a.id, "B received A and replies independently", "reply-1")
+                }
+                task.botId == "member" && request.id.startsWith("peer:") -> returned.complete(Unit)
+            }
+            control.setState(sid, SessionRunState.COMPLETED)
+            GroupTurnOutcome("done", false)
+        }
+        a = engine.create("member", "group", "chief", "parent", "hold-a")
+        withTimeout(10000) { senderEntered.await() }
+        b = engine.create("peer", "group", "chief", "parent", "ready-b")
+        withTimeout(10000) { receiverEntered.await(); engine.awaitTask(b.id) }
+        control.cancel("parent")
+        val key = engine.sendMemberMessage(a.sessionId!!, b.id, "A shares findings while working", "findings-1")
+        assertEquals(key, engine.sendMemberMessage(a.sessionId!!, b.id, "A shares findings while working", "findings-1"))
+        withTimeout(10000) { received.await(); engine.awaitRequest(key) }
+        assertFalse("Parent stop must not cancel independent source", senderRelease.isCompleted)
+        assertFalse(returned.isCompleted)
+        senderRelease.complete(Unit)
+        withTimeout(10000) { returned.await() }
+        assertEquals(1, engine.history(b.id).count { it.id == key })
+    }
+
+    @Test fun `new independent members inherit approval and plan intent without escalation`() = runBlocking {
+        seed()
+        sessions.upsert(sessions.findById("parent")!!.copy(approvalMode = "request", runMode = "plan"))
+        val release = CompletableDeferred<Unit>()
+        val engine = runtime { task, request, admitted ->
+            val sid = task.sessionId!!
+            val accepted = control.submit(sid, request.instruction) as PromptSubmission.Accepted
+            admitted(accepted.taskId); release.await(); control.setState(sid, SessionRunState.COMPLETED)
+            GroupTurnOutcome("done", false)
+        }
+        val task = engine.create("member", "group", "chief", "parent", "read only")
+        val child = sessions.findById(task.sessionId!!)!!
+        assertEquals("request", child.approvalMode)
+        assertEquals("plan", child.runMode)
+        release.complete(Unit)
+    }
+
     private class FakeControl : SessionControl {
         override val currentSessionId = MutableStateFlow("parent")
         override val sessionRunStates = MutableStateFlow<Map<String, SessionRunState>>(emptyMap())

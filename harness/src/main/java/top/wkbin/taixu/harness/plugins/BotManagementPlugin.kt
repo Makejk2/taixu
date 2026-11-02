@@ -248,7 +248,7 @@ fun botManagementPlugin(
             botRepository = botRepository,
             groupRepository = groupRepository,
             assignments = assignments, runtime = runtime,
-        ) + independentAssignmentTools(botRepository, groupRepository, runtime) + botModelTools(botRepository, modelManager) + groupReviewTools(botRepository, groupRepository, runtime),
+        ) + independentMemberTools(runtime) + independentAssignmentTools(botRepository, groupRepository, runtime) + botModelTools(botRepository, modelManager) + groupReviewTools(botRepository, groupRepository, runtime),
     )
 }
 

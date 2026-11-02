@@ -47,6 +47,7 @@ internal object HarnessApiMapper {
             lower == "search_web" -> HarnessTool.SEARCH_WEB
             lower == "memory" -> HarnessTool.MEMORY
             lower == "app_config" -> HarnessTool.APP_CONFIG
+            lower == "team" -> HarnessTool.TEAM
             lower == "plan" -> HarnessTool.PLAN
             lower == "scratchpad" -> HarnessTool.SCRATCHPAD
             lower == "history.search" || lower == "history_search" -> HarnessTool.HISTORY_SEARCH
@@ -75,6 +76,7 @@ internal object HarnessApiMapper {
         HarnessTool.SEARCH_WEB -> "search_web"
         HarnessTool.MEMORY -> "memory"
         HarnessTool.APP_CONFIG -> "app_config"
+        HarnessTool.TEAM -> "team"
         HarnessTool.PLAN -> "plan"
         HarnessTool.SCRATCHPAD -> "scratchpad"
         HarnessTool.HISTORY_SEARCH -> "history_search"

@@ -193,6 +193,7 @@ internal val toolBackendModule = module {
         )
     }
     single { top.wkbin.taixu.harness.config.createAppConfigBackend(top.wkbin.taixu.core.datastore.AgentConfigPreferences(get()), get()) }
+    single { top.wkbin.taixu.harness.team.createTeamBackend(get(), get(), get(), get(), { get() }, { get() }, { get() }, get()) }
     single<ToolExecutor> {
         ToolExecutor(
             fileAccess = get(),
@@ -221,7 +222,7 @@ internal val toolBackendModule = module {
             toolCheckpoints = get(),
             workspaceToolBackend = get(), governanceGuard = get(),
             environments = get(),
-            appConfigBackend = get(),
+            appConfigBackend = get(), teamBackend = get(),
         )
     }
 

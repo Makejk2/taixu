@@ -82,6 +82,7 @@ class HarnessToolProvider(
         READ_ONLY_TOOL_NAMES + if (allowWriteTools) WRITE_TOOL_NAMES else emptySet()
 
     private fun denialReason(name: String, tool: HarnessTool, args: JsonObject): String? = when (tool) {
+        HarnessTool.TEAM -> "team 仅可在原生绑定会话内经用户授权使用。"
         HarnessTool.APP_CONFIG -> "app_config 仅可在原生绑定会话内使用，不向外部 MCP 客户端开放。"
         HarnessTool.READ -> null
         HarnessTool.HOST -> {

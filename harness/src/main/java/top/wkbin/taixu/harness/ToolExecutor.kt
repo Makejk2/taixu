@@ -80,6 +80,7 @@ class ToolExecutor(
     private val governanceGuard: top.wkbin.taixu.harness.bot.GroupGovernanceGuard? = null,
     private val environments: top.wkbin.taixu.harness.environment.SessionExecutionEnvironments? = null,
     private val appConfigBackend: top.wkbin.taixu.harness.config.AppConfigToolBackend? = null,
+    private val teamBackend: top.wkbin.taixu.harness.team.TeamToolBackend? = null,
 ) {
     private val mutationSnapshots = WorkspaceMutationSnapshots(checkpointStore, eventBus)
     private val workspaceTools = workspaceToolBackend ?: WorkspaceToolBackend(
@@ -144,6 +145,12 @@ class ToolExecutor(
         operationId: String? = null,
     ): ToolResult {
         val now = System.currentTimeMillis()
+        if (toolCall.tool == HarnessTool.TEAM) {
+            return top.wkbin.taixu.harness.team.executeTeam(teamBackend,
+                { id -> sessionDao?.findById(id)?.runMode?.let(RunMode::fromId) },
+                toolCall, sessionId, bypassApproval, now,
+            ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }
+        }
         if (toolCall.tool == HarnessTool.APP_CONFIG) {
             return top.wkbin.taixu.harness.config.executeAppConfig(
                 appConfigBackend, approvalPolicyEngine,

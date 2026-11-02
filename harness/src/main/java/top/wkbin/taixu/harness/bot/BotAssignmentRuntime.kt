@@ -147,7 +147,8 @@ class BotAssignmentRuntime(
             modelVariant = bot.modelVariant,
             // Empty is a persisted workspace identity too; the environment maps it to /workspace.
             workspace = source.workspace, projectType = source.projectType,
-            approvalMode = ApprovalMode.FULL_ACCESS.id, executionTargetJson = source.executionTargetJson,
+            approvalMode = ApprovalMode.entries.firstOrNull { it.id == source.approvalMode }?.id ?: ApprovalMode.ASSISTED.id,
+            runMode = source.runMode, executionTargetJson = source.executionTargetJson,
         )
         val nativeSource = nativeTasks?.listForSession(sourceSessionId, top.wkbin.taixu.core.database.task.AgentTaskStatus.ACTIVE)
             ?.singleOrNull { it.operationId == operationId && it.groupId == groupId }
@@ -200,6 +201,11 @@ class BotAssignmentRuntime(
             }
         }
     }
+    /** Durable peer mail is a queued turn in the recipient's OWN independent session, never a subagent lane. */
+    suspend fun sendMemberMessage(sourceSession: String, targetAssignmentId: String, text: String, messageId: String): String =
+        sendIndependentMemberMessage(repository, groups, sessions, sourceSession, targetAssignmentId, text, messageId) { target, group, body, key ->
+            continueTask(target, group, body, key)
+        }
     suspend fun history(id: String) = repository.requestsFor(id)
     suspend fun taskForSession(sessionId: String) = repository.assignmentForSession(sessionId)
     suspend fun report(sessionId: String, reason: String?, artifacts: List<String>) = repository.reportBlock(sessionId, reason, artifacts)

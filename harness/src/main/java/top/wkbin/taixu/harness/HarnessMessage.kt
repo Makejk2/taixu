@@ -20,6 +20,7 @@ enum class HarnessTool {
     @SerialName("memory") MEMORY,
     @SerialName("plan") PLAN,
     @SerialName("app_config") APP_CONFIG,
+    @SerialName("team") TEAM,
     @SerialName("scratchpad") SCRATCHPAD,
     @SerialName("history_search") HISTORY_SEARCH,
     @SerialName("history_read") HISTORY_READ,

@@ -617,4 +617,5 @@
     <string name="chat_manual_model">手动输入</string>
     <string name="chat_model_list">模型列表</string>
     <string name="chat_action_app_config">应用配置</string>
+    <string name="chat_action_team">智能体团队</string>
 </resources>

@@ -31,6 +31,7 @@ class ApprovalPolicyEngine(
         rawToolName: String? = null,
         annotations: McpToolAnnotations? = null,
     ): ApprovalDecision {
+        if (tool == HarnessTool.TEAM) return top.wkbin.taixu.harness.team.teamApproval(args)
         if (tool == HarnessTool.APP_CONFIG) return top.wkbin.taixu.harness.config.appConfigApproval(args)
         // 宿主特权命令作用于真实 Android 系统。只读操作始终放行；
         // 完全访问 = 用户显式授权一切宿主操作（含 exec / 卸载应用），全部自动放行；
@@ -80,7 +81,6 @@ class ApprovalPolicyEngine(
         if (tool == HarnessTool.PROCESS && processAction(args) in setOf("status", "logs", "list")) {
             return ApprovalDecision(false)
         }
-
         val summary = summarize(tool, args, rawToolName)
         if (mode == ApprovalMode.REQUEST) {
             // REQUEST 模式统一要求审批；注解升级只调整风险等级——声明了破坏性的
@@ -88,7 +88,6 @@ class ApprovalPolicyEngine(
             val base = ApprovalDecision(true, "normal", "当前权限模式要求所有会改变状态或产生外部副作用的工具操作先获得批准。", summary)
             return if (tool == HarnessTool.MCP) AnnotationEscalation.escalate(base, annotations) else base
         }
-
         return when (tool) {
             HarnessTool.WRITE, HarnessTool.EDIT -> {
                 val path = args["path"]?.jsonPrimitive?.content.orEmpty()
@@ -142,6 +141,7 @@ class ApprovalPolicyEngine(
         args: JsonObject,
         rawToolName: String? = null,
     ): String? = when (tool) {
+        HarnessTool.TEAM -> if (args["action"]?.jsonPrimitive?.content in setOf("list", "get", "status", "proposal")) null else "team 在 PLAN 中仅允许查询。"
         HarnessTool.APP_CONFIG -> if (args["action"]?.jsonPrimitive?.content in setOf("list", "get", "grants")) null else "app_config 在 PLAN 中仅允许 list/get/grants。"
 
         // 只读检索与元操作：全放

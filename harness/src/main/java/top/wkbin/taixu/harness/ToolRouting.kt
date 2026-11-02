@@ -95,6 +95,7 @@ internal class ToolRouting(
             HarnessTool.MEMORY to service,
             HarnessTool.PLAN to service,
             HarnessTool.APP_CONFIG to { error("app_config must pass the dedicated native approval gate") },
+            HarnessTool.TEAM to { error("team must pass the dedicated native approval gate") },
             HarnessTool.SCRATCHPAD to service,
             HarnessTool.SUBAGENT to service,
             HarnessTool.BUILD_SCRIPT to service,

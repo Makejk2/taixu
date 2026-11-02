@@ -1,0 +1,157 @@
+package top.wkbin.taixu.harness.team
+
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.*
+import org.junit.Assert.*
+import org.junit.Test
+import top.wkbin.taixu.core.model.RunMode
+import top.wkbin.taixu.core.model.bot.*
+import top.wkbin.taixu.harness.*
+
+class TeamServiceTest {
+    private class Port : TeamPort {
+        val rows = linkedMapOf<String, BotMemberGroup>()
+        val groups = linkedMapOf<String, GroupChat>()
+        var writes = 0
+        var starts = 0
+        var stops = 0
+        var member = false
+        var failStart = false
+        val bots = mutableSetOf("admin", "author", "reviewer", "executor")
+        override suspend fun memberSession(sessionId: String) = member
+        override suspend fun teams() = rows.values.toList()
+        override suspend fun botExists(id: String) = id in bots
+        override suspend fun memberSnapshot(id: String) = id.also { require(it in bots) }
+        override suspend fun createMember(spec: JsonObject): String = "created-${bots.size}".also { bots += it; writes++ }
+        override suspend fun deleteMember(id: String) { bots -= id }
+        override suspend fun save(team: BotMemberGroup) {
+            require(rows[team.id]?.draftRevision == null || rows[team.id]?.draftRevision == team.draftRevision)
+            rows[team.id] = team.copy(draftRevision = team.draftRevision + 1); writes++
+        }
+        override suspend fun publish(id: String, revision: Int): Int {
+            val old = rows.getValue(id); require(old.draftRevision == revision)
+            val v = old.publishedVersion + 1
+            rows[id] = old.copy(publishedVersion = v, publishedSnapshot = TeamPublishedVersion(id, v, old.name, old.memberIds, old.definition!!, 1))
+            writes++; return v
+        }
+        override suspend fun group(id: String) = groups[id]
+        override suspend fun createGroup(group: GroupChat, teamId: String) { groups[group.id] = group; writes++ }
+        override suspend fun start(groupId: String, task: String) { starts++; check(!failStart) { "admission unavailable" } }
+        override suspend fun stop(groupId: String) { stops++ }
+        override suspend fun status(groupId: String) = groups.getValue(groupId).toString()
+    }
+    private fun args(value: String) = Json.parseToJsonElement(value).jsonObject
+    private fun create() = args("""{"action":"propose","reason":"建立真实持久团队","operation":{"op":"create","name":"研发团队","memberIds":["admin"],"definition":{"adminBotId":"admin"}}}""")
+    private fun id(output: String) = Regex("proposalId：([^\\n]+)").find(output)!!.groupValues[1]
+    private suspend fun expectFailure(block: suspend () -> Unit) {
+        try { block(); fail("Expected rejection") } catch (e: IllegalArgumentException) { /* expected */ }
+        catch (e: IllegalStateException) { /* expected */ }
+    }
+    private suspend fun commit(service: TeamService, session: String, proposal: String) {
+        service.prepare(session, proposal, "native-call")
+        service.applyNative(session, proposal, "native-call")
+    }
+
+    @Test fun immutableReasonAndNativeSingleUse() = runBlocking {
+        val port = Port(); val audit = mutableListOf<String>()
+        val service = TeamService(port, TeamAudit { _, action, detail -> audit += "$action:$detail" })
+        val output = service.execute("owner", create()); val proposal = id(output)
+        assertEquals(0, port.writes)
+        expectFailure { service.applyNative("owner", proposal, "native-call") }
+        service.prepare("owner", proposal, "native-call")
+        expectFailure { service.applyNative("other", proposal, "native-call") }
+        expectFailure { service.applyNative("owner", proposal, "forged-call") }
+        service.applyNative("owner", proposal, "native-call")
+        assertEquals(1, port.writes)
+        assertEquals(0, port.rows.values.single().publishedVersion)
+        expectFailure { service.applyNative("owner", proposal, "native-call") }
+        assertTrue(audit.any { it.contains("reason：建立真实持久团队") && it.contains("snapshotSha256") })
+    }
+
+    @Test fun customMembersGovernancePublicationAndIndependentGroup() = runBlocking {
+        val port = Port(); val service = TeamService(port, TeamAudit { _, _, _ -> })
+        val definition = """{"adminBotId":"admin","governance":{"rules":[{"id":"code","name":"代码审议","authorId":"author","reviewerId":"reviewer","executorId":"executor"}]}}"""
+        val op = args("""{"action":"propose","reason":"代码交付制衡","operation":{"op":"create","name":"自定义团队","memberIds":["admin","author","reviewer","executor"],"members":[{"key":"designer","name":"设计","role":"设计","systemPrompt":"负责设计"}],"definition":$definition}}""")
+        commit(service, "owner", id(service.execute("owner", op)))
+        val team = port.rows.values.single()
+        assertEquals(5, team.memberIds.size)
+        assertEquals("code", team.definition!!.governance.rules.single().id)
+        val publish = args("""{"action":"propose","reason":"发布审议规则","operation":{"op":"publish","teamId":"${team.id}","expectedRevision":1}}""")
+        commit(service, "owner", id(service.execute("owner", publish)))
+        assertEquals(1, port.rows.getValue(team.id).publishedVersion)
+        val start = args("""{"action":"propose","reason":"启动代码交付","operation":{"op":"start","teamId":"${team.id}","task":"执行交付"}}""")
+        commit(service, "owner", id(service.execute("owner", start)))
+        assertEquals(1, port.starts)
+        val group = port.groups.values.single()
+        assertEquals(team.id, group.teamGroupId)
+        val stop = args("""{"action":"propose","reason":"用户停止","operation":{"op":"stop","groupId":"${group.id}"}}""")
+        commit(service, "owner", id(service.execute("owner", stop)))
+        assertEquals(1, port.stops)
+    }
+
+    @Test fun memberCannotModifyEvenWithNativeReplay() = runBlocking {
+        val port = Port(); val service = TeamService(port, TeamAudit { _, _, _ -> })
+        val proposal = id(service.execute("owner", create()))
+        service.prepare("owner", proposal, "native-call")
+        port.member = true
+        expectFailure { service.execute("owner", create()) }
+        expectFailure { service.applyNative("owner", proposal, "native-call") }
+        assertEquals(0, port.writes)
+    }
+
+    @Test fun draftRevisionChangeInvalidatesApprovalAndOldPublicationStaysFixed() = runBlocking {
+        val port = Port(); val service = TeamService(port, TeamAudit { _, _, _ -> })
+        commit(service, "owner", id(service.execute("owner", create())))
+        val team = port.rows.values.single()
+        val publish = args("""{"action":"propose","reason":"发布","operation":{"op":"publish","teamId":"${team.id}","expectedRevision":1}}""")
+        commit(service, "owner", id(service.execute("owner", publish)))
+        val draft = args("""{"action":"propose","reason":"修改名称","operation":{"op":"draft","teamId":"${team.id}","expectedRevision":1,"name":"新草稿"}}""")
+        val proposal = id(service.execute("owner", draft)); service.prepare("owner", proposal, "native-call")
+        port.rows[team.id] = port.rows.getValue(team.id).copy(draftRevision = 2)
+        expectFailure { service.applyNative("owner", proposal, "native-call") }
+        assertEquals("研发团队", port.rows.getValue(team.id).publishedSnapshot!!.name)
+    }
+
+    @Test fun auditFailureAndRestartFailClosed() = runBlocking {
+        val port = Port()
+        val broken = TeamService(port, TeamAudit { _, _, _ -> error("disk full") })
+        expectFailure { broken.execute("owner", create()) }
+        assertEquals(0, port.writes)
+        val service = TeamService(port, TeamAudit { _, _, _ -> })
+        val proposal = id(service.execute("owner", create()))
+        val restarted = TeamService(port, TeamAudit { _, _, _ -> })
+        expectFailure { restarted.prepare("owner", proposal, "native-call") }
+    }
+
+    @Test fun partialStartNeverReplays() = runBlocking {
+        val port = Port(); val service = TeamService(port, TeamAudit { _, _, _ -> })
+        commit(service, "owner", id(service.execute("owner", create())))
+        val t = port.rows.values.single()
+        port.publish(t.id, 1)
+        val start = args("""{"action":"propose","reason":"启动","operation":{"op":"start","teamId":"${t.id}","task":"执行"}}""")
+        val proposal = id(service.execute("owner", start)); service.prepare("owner", proposal, "native-call")
+        port.failStart = true
+        expectFailure { service.applyNative("owner", proposal, "native-call") }
+        expectFailure { service.applyNative("owner", proposal, "native-call") }
+        assertEquals(1, port.starts); assertEquals(1, port.groups.size)
+    }
+
+    @Test fun planAndFullAccessCannotBypassDedicatedGate() = runBlocking {
+        val port = Port(); val service = TeamService(port, TeamAudit { _, _, _ -> })
+        val backend = TeamToolBackend(service)
+        val planCall = ToolCall("plan", 1L, HarnessTool.READ, create())
+        val blocked = executeTeam(backend, { RunMode.PLAN }, planCall, "owner", true, 1L) { error("PLAN must not prompt") }
+        assertFalse(blocked.success); assertEquals("PLAN_BLOCKED", blocked.errorCode)
+        val proposal = id(service.execute("owner", create()))
+        val apply = ToolCall("apply", 1L, HarnessTool.READ, args("""{"action":"apply","proposalId":"$proposal"}"""))
+        val forged = executeTeam(backend, { RunMode.BUILD }, apply, "owner", true, 1L) { error("unreachable") }
+        assertFalse(forged.success)
+        var prompts = 0
+        val awaiting = executeTeam(backend, { RunMode.BUILD }, apply, "owner", false, 1L) {
+            prompts++; assertTrue(it.reason.contains("reason：")); ToolResult("r", 1L, apply.id, false, "waiting", awaitingApproval = true)
+        }
+        assertTrue(awaiting.awaitingApproval); assertEquals(1, prompts); assertEquals(0, port.writes)
+        val applied = executeTeam(backend, { RunMode.BUILD }, apply, "owner", true, 1L) { error("already approved") }
+        assertTrue(applied.success); assertEquals(1, port.writes)
+    }
+}

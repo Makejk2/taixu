@@ -1,5 +1,4 @@
 package top.wkbin.taixu.harness
-
 import top.wkbin.taixu.harness.core.LlmApi
 import java.io.IOException
 import java.time.ZonedDateTime
@@ -30,7 +29,6 @@ import java.net.URI
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-
 /** 可独立测试的 HTTP 层：OpenAI 兼容 chat/completions 请求与响应解析。 */
 internal class ChatApi(
     private val okHttpClient: OkHttpClient,
@@ -68,7 +66,6 @@ internal class ChatApi(
                 cancelHandle?.dispose()
             }
         }
-
     /**
      * 流式调用：逐行读取 SSE（data: ...），每个内容增量立即通过 [onDelta] 回调
      * 交给 UI；工具调用参数按 index 分片累积。推理增量通过 [onReasoning] 回调。
@@ -89,7 +86,6 @@ internal class ChatApi(
     } catch (_: StreamOptionsRejectedException) {
         executeStream(model, messages, onReasoning, onToolProgress, onDelta, includeUsage = false)
     }
-
     @OptIn(InternalCoroutinesApi::class)
     private suspend fun executeStream(
         model: ModelConfig,
@@ -981,6 +977,9 @@ class ProviderClient internal constructor(
                     ).jsonObject,
                 ),
             ),
+            ApiToolDefinition(function = ApiFunctionDefinition(
+                name = "team", description = "管理持久独立智能体团队，不是临时子智能体。创建成员、组织及代码级审议规则、发布、建群启动和停止均须 propose 讲明原因，再 apply 由用户原生批准；成员可独立工作、经团队工具交流。先 list/get 查询。",
+                parameters = Json.parseToJsonElement(top.wkbin.taixu.harness.team.TeamToolSpec.schema).jsonObject)),
             ApiToolDefinition(
                 function = ApiFunctionDefinition(
                     name = "app_config",
