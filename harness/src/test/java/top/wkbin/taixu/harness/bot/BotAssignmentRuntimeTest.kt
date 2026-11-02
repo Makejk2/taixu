@@ -414,6 +414,7 @@ class BotAssignmentRuntimeTest {
         assertEquals("request", child.approvalMode)
         assertEquals("plan", child.runMode)
         release.complete(Unit)
+        Unit // JUnit4 requires a void method; CompletableDeferred.complete returns Boolean.
     }
 
     private class FakeControl : SessionControl {
