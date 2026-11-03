@@ -39,6 +39,15 @@ class AppModuleDirectoryTest {
         module?.let { put("module", it) }
     }
 
+    @Test fun actualManagementBindingsAreReferencesNotFullCoverageClaims() = runBlocking {
+        val directory = AppModuleDirectory(visibleNativeToolNames = { setOf("app_config", "team") })
+        val snapshot = directory.modules()
+        assertEquals(listOf("app_config"), snapshot.module("workflow_management").ids())
+        assertEquals(listOf("team"), snapshot.module("bot_management").ids())
+        assertEquals("partial_tool_surface_not_full_module_api", snapshot.module("workflow_management").field("reason"))
+        assertEquals("unsupported", snapshot.module("model_management").field("status"))
+    }
+
     @Test fun missingBindingsFailClosed() = runBlocking {
         val result = AppModuleDirectory(nativeDefinitions = { listOf(definition("read")) }).modules()
         listOf("native", "host", "plugins", "mcp", "model_management").forEach {

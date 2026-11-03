@@ -102,7 +102,15 @@ class RemotePluginDownloadCancellationTest {
                 ))) { _, _ -> }
                 fail("Expected network IOException")
             } catch (actual: IOException) {
-                assertSame(expected, actual)
+                // Coroutine debug stacktrace recovery may copy the exception across withContext.
+                // Preserve exact IO type/message and original identity in its cause chain, not
+                // necessarily at the outer boundary. This never accepts cancellation/success.
+                assertEquals(expected.javaClass, actual.javaClass)
+                assertEquals(expected.message, actual.message)
+                var cursor: Throwable? = actual
+                val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Throwable, Boolean>())
+                while (cursor != null && cursor !== expected && seen.add(cursor)) cursor = cursor.cause
+                assertSame("Original network exception must survive coroutine recovery", expected, cursor)
             }
             assertFalse(directory.walkTopDown().any { it.name == "package.txplugin" || it.name.endsWith(".tmp") })
         } finally {

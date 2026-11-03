@@ -1,6 +1,6 @@
 # app_admin / workflow 对话控制面
 
-## 边界与接入（尚需主控制面装配）
+## 边界与接入（已接入，集成验证见CI报告）
 
 新实现位于 `harness/admin`，不替换工作流引擎、不读取密钥仓储，不暴露 `decide`。
 真实保存/删除复用 `WorkflowRepository`；运行/停止复用 `WorkflowRunManager`。

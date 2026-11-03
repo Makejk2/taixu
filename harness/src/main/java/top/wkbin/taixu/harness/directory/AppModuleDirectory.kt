@@ -155,13 +155,15 @@ class AppModuleDirectory(
             NativeModule("planning", setOf("plan", "scratchpad")),
             NativeModule("agents", setOf("invoke_subagent", "invoke_dual_agent", "team")),
             NativeModule("configuration", setOf("app_config")),
+            NativeModule("workflow_management", setOf("app_config")),
+            NativeModule("bot_management", setOf("team")),
             NativeModule("capabilities", setOf("use_capability", "host")),
             NativeModule("skills", setOf("load_skill", "load_rule")),
             NativeModule("interaction", setOf("ask_user", "render_surface")),
             NativeModule("web_search", setOf("search_web")),
         )
         private val UI_ONLY_MODULES = listOf(
-            "model_management", "session_management", "workflow_management", "bot_management",
+            "model_management", "session_management",
             "git_management", "browser_management", "terminal_ui", "diagnostics_ui", "permission_management",
         )
     }
