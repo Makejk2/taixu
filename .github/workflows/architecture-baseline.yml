@@ -1,0 +1,123 @@
+name: Architecture baseline ratchet
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test ratchet rules
+        run: python tools/tests/test_architecture_baseline.py
+      - name: Test device benchmark report contracts
+        run: |
+          python tools/tests/test_runtime_benchmark.py
+          bash -n tools/runtime-benchmark-device.sh
+      - name: Check against trusted target commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: python tools/check-architecture-baseline.py --base-ref "$BASE_SHA"
+
+  harness-contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Runtime and MCP credential recovery regressions
+        run: |
+          chmod +x gradlew
+          ./gradlew :runtime:testDebugUnitTest :core:database:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.runtime.*' \
+            --tests 'top.wkbin.taixu.core.database.McpHeaderRecoveryTest'
+      - name: Offline protocol and output contracts
+        run: |
+          chmod +x gradlew
+          ./gradlew architectureCheck :harness:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.harness.SseFixtureReplayTest' \
+            --tests 'top.wkbin.taixu.harness.ProviderStreamCompletionTest' \
+            --tests 'top.wkbin.taixu.harness.effects.*' \
+            --tests 'top.wkbin.taixu.harness.environment.HarnessCommandOutputTest' \
+            --tests 'top.wkbin.taixu.harness.WorkspaceTextSearchTest' \
+            --tests 'top.wkbin.taixu.harness.WorkspaceToolBackendTest' \
+            --tests 'top.wkbin.taixu.harness.mcp.*' \
+            --tests 'top.wkbin.taixu.harness.CapabilityScriptRunnerTest' \
+            --tests 'top.wkbin.taixu.harness.approval.TrustedToolRiskPolicyTest' \
+            --tests 'top.wkbin.taixu.harness.environment.McpMetadataLifecycleTest' \
+            --tests 'top.wkbin.taixu.harness.ToolSchedulingPolicyTest' \
+            --tests 'top.wkbin.taixu.harness.ToolRoundDispatcherGroupTest' \
+            --tests 'top.wkbin.taixu.harness.projection.SessionStateMirrorsTest' \
+            --tests 'top.wkbin.taixu.harness.MentionExtractorTest' \
+            --tests 'top.wkbin.taixu.harness.btw.*' \
+            --tests 'top.wkbin.taixu.harness.compaction.CompactionStewardTest' \
+            --tests 'top.wkbin.taixu.harness.groupchat.*' \
+            --tests 'top.wkbin.taixu.harness.bot.GroupGovernanceGuardTest' \
+            --tests 'top.wkbin.taixu.harness.bot.GroupGovernanceRuntimeTest' \
+            --tests 'top.wkbin.taixu.harness.session.SessionEntryPayloadTest' \
+            --tests 'top.wkbin.taixu.harness.approval.ApprovalAuditTrailTest' \
+            --tests 'top.wkbin.taixu.harness.checkpoint.TurnChangeCardsTest' \
+            --tests 'top.wkbin.taixu.harness.ExecutionEnvironmentClassifierTest' \
+            --tests 'top.wkbin.taixu.harness.bot.AssignmentEffectVerificationTest' \
+            --tests 'top.wkbin.taixu.harness.session.ProviderActivityTest' \
+            --tests 'top.wkbin.taixu.harness.session.SessionInputControllerTest' \
+            --tests 'top.wkbin.taixu.harness.subagent.BackgroundSubagentRegistryTest'
+          # 会话条目版本化 + 审批审计是持久化契约，迁移测试必须进 CI 守门。
+          ./gradlew :core:database:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.core.database.ApprovalAuditMigration80To81Test' \
+            --tests 'top.wkbin.taixu.core.database.MessageFeedbackMigration81To82Test' \
+            --tests 'top.wkbin.taixu.core.database.GroupWorkAdmissionTest' \
+            --tests 'top.wkbin.taixu.core.database.GroupWorkMigrationTest' \
+            --tests 'top.wkbin.taixu.core.database.MessageFeedbackServiceTest'
+          # 能力白名单切换语义（空集合=锁死回归）必须进 CI 守门。
+          # 像素办公室的相机、场景数据、寻路、无障碍和动效契约同步纳入守门。
+          ./gradlew :feature:bot:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.ui.bot.BotCapabilitySelectionTest' \
+            --tests 'top.wkbin.taixu.ui.bot.OfficeCameraTest' \
+            --tests 'top.wkbin.taixu.ui.bot.OfficePathfindingTest' \
+            --tests 'top.wkbin.taixu.ui.bot.OfficeReducedMotionTest' \
+            --tests 'top.wkbin.taixu.ui.bot.OfficeSceneSpecTest' \
+            --tests 'top.wkbin.taixu.ui.bot.OfficeSceneUiTest' \
+            --tests 'top.wkbin.taixu.ui.bot.OfficeWalkHandoffsTest' \
+            --tests 'top.wkbin.taixu.ui.bot.GroupCyberStudioTest' \
+            --tests 'top.wkbin.taixu.ui.bot.PixelOfficeLayoutTest' \
+            --tests 'top.wkbin.taixu.ui.bot.PixelOfficeAmbientTest' \
+            --tests 'top.wkbin.taixu.ui.bot.OfficeReportLinksTest'
+          ./gradlew :core:datastore:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.core.datastore.McpClientPreferencesTest'
+          ./gradlew :app:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.di.*'
+          # 沙箱后端构造器的契约测试：droidspaces 与 proot 两侧的 argv 形态都必须进 CI。
+          # 架构棘轮与 harness 契约都不跑 :runtime，缺了这一步实现回归时不会报警。
+          ./gradlew :runtime:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.runtime.droidspaces.*' \
+            --tests 'top.wkbin.taixu.runtime.proot.ProotCommandBuilderTest' \
+            --tests 'top.wkbin.taixu.runtime.GuestProcessEnvironmentTest' \
+            --tests 'top.wkbin.taixu.runtime.GuestLoginEnvironmentTest' \
+            --tests 'top.wkbin.taixu.runtime.remote.SshLanRouteTest' \
+            --tests 'top.wkbin.taixu.runtime.remote.SshConnectionStageTest' \
+            --tests 'top.wkbin.taixu.runtime.remote.RemoteMetricsCommandTest' \
+            --tests 'top.wkbin.taixu.runtime.rootfs.TarHardlinkCopyTest'
+          # 远程连接测试要按阶段报错，不能把密码或私钥带回界面。
+          ./gradlew :feature:settings:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.ui.settings.RemoteConnectionStageTest'
+          # 开发者诊断按首次出现会话聚合反馈：保序与空白标题回退必须进 CI 守门。
+          ./gradlew :feature:developer:testDebugUnitTest --no-daemon --console=plain \
+            --tests 'top.wkbin.taixu.ui.developer.FeedbackDiagnosticsGroupingTest'

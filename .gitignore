@@ -1,0 +1,105 @@
+# Gradle and Kotlin caches
+.gradle/
+.kotlin/
+**/build/
+!runtime/src/main/java/top/wkbin/taixu/runtime/build/
+!runtime/src/main/java/top/wkbin/taixu/runtime/build/*.kt
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+
+# Android native build outputs
+.externalNativeBuild/
+.cxx/
+**/.externalNativeBuild/
+**/.cxx/
+
+# Machine-local Android configuration
+local.properties
+
+# Signing credentials and service configuration
+*.jks
+*.keystore
+keystore.properties
+google-services.json
+
+# Logs, diagnostics, and heap dumps
+*.log
+*.hprof
+
+# Operating system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Temporary third-party repo clones (Operit analysis workspace)
+.tmp_operit_analysis/
+
+# Locally downloaded offline-plugin SDK archives (about 1.6 GiB).
+# Keep manifests, scripts, checksums and download instructions versioned.
+assets/plugins/android-suite-offline/payload/archives/
+
+# Locally downloaded QEMU x86_64 user-mode plugin archives (~47 MiB).
+# Keep manifests, scripts, checksums and download instructions versioned.
+assets/plugins/qemu-x86-64-compat/payload/archives/
+
+# Locally downloaded RTK offline plugin binary (~8.7 MiB) and dist artifacts.
+# Keep manifests, scripts, checksums, config and download instructions versioned.
+assets/plugins/rtk-suite-offline/payload/bin/
+assets/plugins/cc-switch/payload/lib/
+
+# Locally fetched Android CLI binaries for the android-skills plugin (~90 MiB).
+# The vendored skills (payload/skills) stay versioned for provenance; the launcher
+# and the android-cli payload are reproduced by tools/vendor-android-skills-plugin.py.
+assets/plugins/android-skills/payload/bin/
+# Reproduced by tools/package-github-plugin.py from the pinned official gh archive.
+assets/plugins/github/payload/vendor/
+# Reproduced from the pinned official ARM64 release by package-workspace-plugins.py.
+assets/plugins/lazygit/payload/vendor/
+dist/
+.workbuddy/
+.trae/
+.codegraph/
+.tmp_unusedscan/
+webchat/node_modules/
+__pycache__/
+*.pyc
+webchat/dist/
+
+# 运行时崩溃帧调试产物（不入库）
+.crash_frames/
+
+# 临时调试产物与脚本（不入库）
+*_tmp/
+_*.py
+build-output.txt
+scripts_patch/
+
+# Harness transient tool/subagent artifacts (may contain project output or logs)
+.taixu-outputs/
+.taixu-subagent/
+
+# Local agent protocol dumps, review exports, and temporary attachments
+/.codex_schema/
+/codex_appserver_schema.json
+/.loomy-pr-review/
+/.loomy-attachments/
+/.opencode/
+
+
+
+# 设计稿截图（本地验证用，不入库）
+shots/
+
+# Reproduced from pinned Agent2API release by tools/package-agent2api-plugin.py.
+assets/plugins/agent2api/payload/vendor/
+# 官网落地页的构建副本与 Qoder 部署清单（源文件在 site/，可重新生成）
+site/dist/
+*.qoder.site
