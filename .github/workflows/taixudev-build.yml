@@ -5,6 +5,11 @@ on:
     branches: ['feature/ai-superuser-config']
   workflow_dispatch:
     inputs:
+      full_validation:
+        description: 'Final acceptance only: all features complete, run full tests and build APK'
+        type: boolean
+        required: false
+        default: false
       release_tag:
         description: 'Optional Release Tag (e.g. v0.2.1-dev)'
         required: false
@@ -30,12 +35,17 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+          FULL_VALIDATION: ${{ inputs.full_validation }}
         run: |
           tag="$RELEASE_TAG"
           if [[ "$tag" =~ ^[[:space:]]*$ ]]; then
             echo "create=false" >> "$GITHUB_OUTPUT"
             echo "release_tag is empty; GitHub Release will not be created"
             exit 0
+          fi
+          if [[ "$FULL_VALIDATION" != "true" ]]; then
+            echo "::error::Release requires explicit final full_validation after feature completion."
+            exit 1
           fi
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
             echo "::error::Invalid release_tag. Expected v<major>.<minor>.<patch>[-suffix] (letters, digits, dot, hyphen). Underscores are rejected."
@@ -78,6 +88,7 @@ jobs:
           ./gradlew :core:database:testDebugUnitTest --tests '*TeamCommunication*' :harness:testDebugUnitTest --tests '*IndependentMemberInboxTest' --tests '*BotAssignmentRuntimeTest' --tests '*TeamCommunicationBudgetTest' --tests '*TeamServiceTest' --no-daemon --stacktrace --continue
 
       - name: Run Debug Unit Tests
+        if: github.event_name == 'workflow_dispatch' && inputs.full_validation == true
         env:
           TAIXU_DEV_BUILD: "1"
         run: ./gradlew testDebugUnitTest --no-daemon --stacktrace --continue
@@ -95,12 +106,14 @@ jobs:
           retention-days: 7
 
       - name: Build TaiXuDev APK
+        if: github.event_name == 'workflow_dispatch' && inputs.full_validation == true
         env:
           TAIXU_DEV_BUILD: "1"
         run: |
           ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Identify and Rename Output APK
+        if: github.event_name == 'workflow_dispatch' && inputs.full_validation == true
         run: |
           mkdir -p output
           APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
@@ -117,6 +130,7 @@ jobs:
           fi
 
       - name: Upload TaiXuDev APK Artifact
+        if: github.event_name == 'workflow_dispatch' && inputs.full_validation == true
         uses: actions/upload-artifact@v4
         with:
           name: taixudev-apk
@@ -124,7 +138,7 @@ jobs:
           retention-days: 7
 
       - name: Create GitHub Release (Optional)
-        if: steps.release_tag.outputs.create == 'true'
+        if: github.event_name == 'workflow_dispatch' && inputs.full_validation == true && steps.release_tag.outputs.create == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "${{ steps.release_tag.outputs.tag }}"
