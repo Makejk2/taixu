@@ -69,7 +69,7 @@ jobs:
       - name: Run Debug Unit Tests
         env:
           TAIXU_DEV_BUILD: "1"
-        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace --continue
 
       - name: Upload Unit Test Reports
         if: always()

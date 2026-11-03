@@ -49,7 +49,7 @@ fun createTeamBackend(
             val task = independentRuntime().createApprovedTeamRoot(
                 sourceSessionId = request.sourceSessionId, botId = member.botId, groupId = request.groupId,
                 instruction = member.instruction, writePaths = member.writePaths,
-                stableOperationKey = "${request.operationKey}:${member.botId}",
+                stableOperationKey = request.operationKey,
             )
             check(task.independent) { "返回任务并非独立任务" }
             return IndependentTeamStart.Receipt(member.botId, task.id, requireNotNull(task.sessionId))

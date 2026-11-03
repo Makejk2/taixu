@@ -89,7 +89,12 @@ internal class TeamService(
     suspend fun prepare(session: String, id: String, callId: String): String = lock.withLock {
         owner(session)
         val p = proposal(session, id)
-        require(before(p.operation, session) == p.before) { "审批前目标快照已变化，请重新提案" }
+        if (before(p.operation, session) != p.before) {
+            p.consumed = true
+            p.pendingCall = null
+            audit(session, "invalidated", p.id)
+            error("审批前目标快照已变化，请重新提案")
+        }
         validate(p.operation, session)
         val description = "团队变更必须由用户原生批准（完全访问也不豁免）。\n${describe(p)}"
         audit(session, "approval_requested", description)
@@ -101,7 +106,12 @@ internal class TeamService(
         owner(session)
         val p = proposal(session, id)
         require(p.pendingCall == callId) { "没有匹配当前调用的原生审批请求" }
-        require(before(p.operation, session) == p.before) { "目标状态已变化；原批准失效，请重新提案" }
+        if (before(p.operation, session) != p.before) {
+            p.consumed = true
+            p.pendingCall = null
+            audit(session, "invalidated", p.id)
+            error("目标状态已变化；原批准永久失效，请重新提案")
+        }
         validate(p.operation, session)
         // Mark before any side effect. A cancellation, crash or partial failure is never retried.
         audit(session, "applying", describe(p))
