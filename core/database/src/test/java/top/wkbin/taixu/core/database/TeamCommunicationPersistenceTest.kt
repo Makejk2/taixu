@@ -14,6 +14,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import top.wkbin.taixu.core.model.bot.*
+import top.wkbin.taixu.core.database.repository.RoomGroupChatRepository
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -164,6 +165,41 @@ class TeamCommunicationPersistenceTest {
         // Membership removal must also hide previously delivered text on subsequent reads.
         db.openHelper.writableDatabase.execSQL("DELETE FROM group_members WHERE groupId='g' AND botId='chief'")
         assertTrue(tasks.readCommunicationInbox("session-b").isEmpty())
+    }
+
+    @Test(timeout = 20_000) fun cancellingSenderCancelsOnlyUnclaimedRecipientRequests(): Unit = runBlocking {
+        seed(TeamCommunicationPolicy(groupLimit=10,memberLimit=10,rateLimit=100,queueLimit=100))
+        val first = tasks.sendCommunication("session-a", "b", "already claimed", "1")
+        db.openHelper.writableDatabase.execSQL("UPDATE bot_assignments SET status='QUEUED' WHERE id='b'")
+        assertTrue(dao.claimRequest(first.id, 100))
+        val pending = tasks.sendCommunication("session-a", "b", "not claimed", "2")
+        tasks.cancelAssignment("a")
+        assertEquals("cancelled", dao.communication(pending.id)!!.state)
+        assertEquals("cancelled", tasks.getRequest(pending.id)!!.status)
+        assertEquals("submitting", tasks.getRequest(first.id)!!.status)
+        assertFalse(dao.claimRequest(pending.id, 101))
+        assertEquals(2L, tasks.communicationSnapshot("g").charged)
+    }
+
+    @Test(timeout = 20_000) fun deletingSenderSessionCancelsQueuedRecipientRequest(): Unit = runBlocking {
+        seed()
+        val mail = tasks.sendCommunication("session-a", "b", "cancel before dispatch", "1")
+        db.harnessSessionDao().deleteSession("session-a")
+        assertEquals("cancelled", tasks.getRequest(mail.id)!!.status)
+        assertEquals("cancelled", dao.communication(mail.id)!!.state)
+        db.openHelper.writableDatabase.execSQL("UPDATE bot_assignments SET status='QUEUED' WHERE id='b'")
+        assertFalse(dao.claimRequest(mail.id, 100))
+        assertEquals(1L, tasks.communicationSnapshot("g").charged)
+    }
+
+    @Test(timeout = 20_000) fun claimRechecksLedgerAfterDispatcherReadPendingSnapshot(): Unit = runBlocking {
+        seed()
+        val mail = tasks.sendCommunication("session-a", "b", "stale dispatch snapshot", "1")
+        dao.markCommunicationsCancelledForAssignment("a")
+        assertEquals("pending", tasks.getRequest(mail.id)!!.status)
+        db.openHelper.writableDatabase.execSQL("UPDATE bot_assignments SET status='QUEUED' WHERE id='b'")
+        assertFalse(dao.claimRequest(mail.id, 100))
+        assertEquals("cancelled", tasks.getRequest(mail.id)!!.status)
     }
 
     private suspend fun assertFailure(block: suspend () -> Unit) {

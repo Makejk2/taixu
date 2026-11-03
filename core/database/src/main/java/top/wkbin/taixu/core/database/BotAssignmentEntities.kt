@@ -124,6 +124,11 @@ interface BotAssignmentDao : TeamCommunicationDao, NativeTeamStartDao, GroupDeli
     @Transaction
     suspend fun claimRequest(id: String, now: Long): Boolean {
         val request = findAssignmentRequest(id)?.takeIf { it.status == "pending" } ?: return false
+        // Ledger cancellation is authoritative even when a pending dispatch snapshot was already read.
+        if (communication(id)?.state?.let { it != "queued" } == true) {
+            cancelUnclaimedCommunicationRequest(id)
+            return false
+        }
         val task = findById(request.assignmentId) ?: return false
         if (task.status != "QUEUED" || !task.independent) return false
         if (!hasOpenTaskAncestry(task) || !deliveryMember(requireNotNull(task.groupId), task.botId) ||

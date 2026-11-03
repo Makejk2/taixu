@@ -57,7 +57,20 @@ interface TeamCommunicationDao {
     suspend fun heldCommunicationGroups(): List<String>
     @Query("UPDATE team_communication_messages SET state='cancelled', holdReason='assignment_cancelled' " +
         "WHERE state IN ('held','queued') AND (sourceAssignmentId=:assignmentId OR targetAssignmentId=:assignmentId)")
-    suspend fun cancelCommunicationsForAssignment(assignmentId: String)
+    suspend fun markCommunicationsCancelledForAssignment(assignmentId: String)
+
+    @Query("UPDATE bot_assignment_requests SET status='cancelled' WHERE status='pending' AND id IN " +
+        "(SELECT id FROM team_communication_messages WHERE sourceAssignmentId=:assignmentId OR targetAssignmentId=:assignmentId)")
+    suspend fun cancelUnclaimedCommunicationsForAssignment(assignmentId: String)
+
+    @Transaction
+    suspend fun cancelCommunicationsForAssignment(assignmentId: String) {
+        markCommunicationsCancelledForAssignment(assignmentId)
+        cancelUnclaimedCommunicationsForAssignment(assignmentId)
+    }
+
+    @Query("UPDATE bot_assignment_requests SET status='cancelled' WHERE id=:id AND status='pending'")
+    suspend fun cancelUnclaimedCommunicationRequest(id: String)
 
     @Query("UPDATE team_communication_messages SET state=:state, holdReason=:reason, chargedAt=:chargedAt, deliverySequence=CASE WHEN :state='queued' THEN COALESCE(deliverySequence, (SELECT COALESCE(MAX(deliverySequence),0)+1 FROM team_communication_messages)) ELSE NULL END WHERE id=:id")
     suspend fun updateCommunication(id: String, state: String, reason: String?, chargedAt: Long?)
@@ -178,7 +191,7 @@ val MIGRATION_85_86 = object : Migration(85, 86) {
                 val hop = (envelope?.get("hop") as? JsonPrimitive)?.intOrNull ?: 1
                 val group = cursor.getString(4)
                 db.execSQL("INSERT OR IGNORE INTO team_communication_policy (groupId,policyJson,revision,approvedBySession,approvalId,updatedAt) VALUES (?,?,0,NULL,NULL,?)",
-                    arrayOf(group, Json.encodeToString(TeamCommunicationPolicy()), cursor.getLong(3)))
+                    arrayOf<Any?>(group, Json.encodeToString(TeamCommunicationPolicy()), cursor.getLong(3)))
                 val terminal = cursor.getString(7) in setOf("cancelled", "failed", "interrupted") ||
                     cursor.getString(8) in setOf("CANCELLED", "FAILED", "INTERRUPTED") || cursor.isNull(9)
                 val sessionMissing = if (cursor.isNull(9)) true else db.query(
@@ -188,7 +201,7 @@ val MIGRATION_85_86 = object : Migration(85, 86) {
                 // ledger never inserts a request or queues a task, and charges accepted traffic once.
                 val state = if (terminal || sessionMissing) "cancelled" else "queued"
                 db.execSQL("INSERT OR IGNORE INTO team_communication_messages (id,groupId,teamBinding,sourceAssignmentId,sourceMemberId,sourceRequestId,targetAssignmentId,instruction,hop,createdAt,state,holdReason,chargedAt,deliverySequence) VALUES (?,?,?,?,?,NULL,?,?,?,?, ?,NULL,?,?)",
-                    arrayOf(id, group, if (cursor.isNull(5)) null else cursor.getString(5), source, member,
+                    arrayOf<Any?>(id, group, if (cursor.isNull(5)) null else cursor.getString(5), source, member,
                         cursor.getString(1), instruction, hop, cursor.getLong(3), state, cursor.getLong(3), cursor.getLong(6)))
             }
         }
