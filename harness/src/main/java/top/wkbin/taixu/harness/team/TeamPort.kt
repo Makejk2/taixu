@@ -18,6 +18,9 @@ internal interface TeamPort {
     suspend fun publish(id: String, revision: Int): Int
     suspend fun group(id: String): GroupChat?
     suspend fun createGroup(group: GroupChat, teamId: String)
+    suspend fun createOwnedGroup(group: GroupChat, teamId: String, sourceSessionId: String) {
+        error("可信团队建群未装配")
+    }
     suspend fun startSourceSnapshot(sessionId: String): String
     suspend fun validateStart(sessionId: String, published: TeamPublishedVersion, members: List<IndependentTeamStart.Member>)
     suspend fun start(request: IndependentTeamStart.Request): IndependentTeamStart.Result

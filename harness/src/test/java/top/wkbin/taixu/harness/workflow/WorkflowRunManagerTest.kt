@@ -310,3 +310,63 @@ private class RecordingDispatcher : WorkflowScheduleDispatcher {
         cancelled++
     }
 }
+
+/** Offline compiler runner extracts this self-contained regression class, not Android test fixtures. */
+class WorkflowCleanupRunManagerTest {
+    @Test fun pendingCleanupStaysRunningAndStopNeverReplaysBusiness() = runBlocking {
+        val gate = top.wkbin.taixu.runtime.StorageActivityGate()
+        val definition = WorkflowDefinition(id = "cleanup", name = "cleanup", description = "", category = "test",
+            nodes = listOf(WorkflowNode("start", WorkflowNodeType.TRIGGER, "start")), edges = emptyList())
+        val binding = WorkflowExecutionBinding(
+            Json.encodeToString(top.wkbin.taixu.core.model.SessionExecutionTarget.serializer(),
+                top.wkbin.taixu.core.model.SessionExecutionTarget("debian", "/workspace")),
+            "/workspace", "assisted", "build", WorkflowExecutionBinding.hash(definition))
+        var closes = 0; var opens = 0; var runs = 0
+        val world = java.lang.reflect.Proxy.newProxyInstance(
+            top.wkbin.taixu.runtime.environment.ExecutionEnvironment::class.java.classLoader,
+            arrayOf(top.wkbin.taixu.runtime.environment.ExecutionEnvironment::class.java)) { _, method, _ ->
+            when (method.name) {
+                "getId" -> top.wkbin.taixu.runtime.environment.ExecutionEnvironmentId("local-proot", "debian", "/workspace", "workflow:test")
+                "close" -> { closes++; if (closes <= 2) error("cleanup still pending"); Unit }
+                else -> error("unexpected environment call ${method.name}")
+            }
+        } as top.wkbin.taixu.runtime.environment.ExecutionEnvironment
+        val leases = WorkflowExecutionLeases(top.wkbin.taixu.runtime.environment.ExecutionEnvironmentFactory { _, _, _ -> opens++; world },
+            acquireTargetPin = { gate.acquire() }) { true }
+        val runtime = java.lang.reflect.Proxy.newProxyInstance(LinuxRuntime::class.java.classLoader, arrayOf(LinuxRuntime::class.java)) { _, method, _ ->
+            when (method.name) {
+                "getState" -> MutableStateFlow<RuntimeState>(RuntimeState.Ready)
+                "listBackground" -> emptyList<ManagedProcess>()
+                else -> error("unexpected runtime call ${method.name}")
+            }
+        } as LinuxRuntime
+        val repository = java.lang.reflect.Proxy.newProxyInstance(WorkflowRepository::class.java.classLoader,
+            arrayOf(WorkflowRepository::class.java)) { _, method, _ ->
+            when (method.name) { "saveExecution" -> Unit; else -> error("unexpected repository call ${method.name}") }
+        } as WorkflowRepository
+        val executor = object : NodeExecutor {
+            override val supportedTypes = setOf(WorkflowNodeType.TRIGGER)
+            override suspend fun execute(node: WorkflowNode, context: top.wkbin.taixu.core.model.workflow.WorkflowRuntimeContext,
+                onProgress: suspend (top.wkbin.taixu.core.model.workflow.NodeRunStatus, String) -> Unit): NodeExecutionOutput {
+                runs++
+                return NodeExecutionOutput(status = top.wkbin.taixu.core.model.workflow.NodeRunStatus.SUCCESS)
+            }
+        }
+        val manager = WorkflowRunManager(WorkflowScheduler(setOf(executor), WorkflowApprovalBroker()), repository, runtime,
+            Json, AppLogger(ContextWrapper(null)) { it }, leases)
+        val id = manager.start(definition, workspacePath = "/workspace", binding = binding).executionId
+        withTimeout(5000) { while (manager.handle(id)?.settled != true) kotlinx.coroutines.delay(5) }
+        assertTrue(manager.running.value); assertTrue(manager.hasActiveResources(id))
+        assertNotNull(manager.pendingCleanup.value[id])
+        assertFalse(manager.resume(id, emptySet(), 0, 0).accepted)
+        assertTrue(runCatching { manager.stop(id) }.isFailure)
+        assertTrue(manager.hasActiveResources(id)); assertTrue(manager.running.value)
+        assertTrue(runCatching { gate.cleanup { error("must remain pinned") } }.isFailure)
+        manager.cancel(id)
+        withTimeout(5000) { while (manager.running.value || manager.hasActiveResources(id)) kotlinx.coroutines.delay(5) }
+        assertTrue(manager.pendingCleanup.value.isEmpty())
+        manager.stop(id)
+        assertEquals(3, closes); assertEquals(1, opens); assertEquals(1, runs)
+        gate.cleanup { }
+    }
+}

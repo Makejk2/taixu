@@ -62,6 +62,8 @@ class BotAssignmentRuntimeTest {
             },
         )
         groups.attachTeam("group", "published")
+        // Test native owner provenance, not an implicit first-caller claim on a legacy group.
+        db.botAssignmentDao().insertTeamGroupOwner(TeamGroupOwnerEntity("group", "parent"))
     }
 
     private suspend fun rejected(message: String? = null, block: suspend () -> Unit) {

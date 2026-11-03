@@ -78,7 +78,7 @@ internal object AppAdminSafety {
     }
     fun status(value: AppAdminRunStatus): JsonObject = buildJsonObject {
         put("executionId", value.executionId); put("workflowId", value.workflowId)
-        put("definitionHash", value.definitionHash); put("status", value.status); put("active", value.active)
+        put("definitionHash", value.definitionHash); put("status", value.status); put("active", value.active); put("cleanupPending", value.cleanupPending)
         value.startedAt?.let { put("startedAt", it) }; value.finishedAt?.let { put("finishedAt", it) }
         put("note", "持久状态/活动句柄快照；不返回日志、错误、变量或审批令牌。节点审批仍由原生 UI 处理。")
     }

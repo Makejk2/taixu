@@ -527,8 +527,8 @@ val harnessModule = module {
         WorkflowRunManager(
             scheduler = get(),
             repository = get(), linuxRuntime = get(),
-            json = get(),
-            logger = get(),
+            executionLeases = top.wkbin.taixu.harness.workflow.createWorkflowExecutionLeases(get(org.koin.core.qualifier.named("local-execution")), get()),
+            json = get(), logger = get(),
         )
     }
 

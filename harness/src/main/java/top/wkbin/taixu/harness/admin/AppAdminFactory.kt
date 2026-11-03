@@ -47,7 +47,10 @@ fun createAppAdminBackend(
         }.toString()
         return AppAdminSource(session.workspace, adminHash(fingerprint), session.runMode == RunMode.BUILD.id,
             appAdminLocalRunSupported(session.workspace, session.executionTargetJson, native),
-            native.resolvedModelId, native.resolvedModelVariant)
+            native.resolvedModelId, native.resolvedModelVariant,
+            session.executionTargetJson?.takeIf { appAdminLocalRunSupported(session.workspace, it, native) }?.let {
+                top.wkbin.taixu.harness.workflow.WorkflowExecutionBinding(it, session.workspace, session.approvalMode, session.runMode, "")
+            })
     }
     override suspend fun definitions() = workflows.observeDefinitions().first()
     override suspend fun definition(id: String) = workflows.findById(id)
@@ -62,7 +65,8 @@ fun createAppAdminBackend(
         return workflows.deleteCustomIfUnchanged(id, expectedHash)
     }
     override suspend fun validateRun(definition: WorkflowDefinition) {
-        appAdminValidateNativeRun(definition)
+        appAdminValidateNativeRun(definition, runManager().supportsBoundExecution)
+        require(definition.nodes.none { WorkflowExpansions.SOURCE_KEY in it.config }) { "动态扩图需重新批准完整定义" }
     }
     override suspend fun status(executionId: String): AppAdminRunStatus? {
         val manager = runManager()
@@ -70,23 +74,28 @@ fun createAppAdminBackend(
         val state = handle?.state?.value ?: manager.activeRuns.value[executionId]
         if (state != null) return AppAdminRunStatus(executionId, state.definition.id,
             definitionHash(state.definition), state.status.name,
-            handle != null && state.status !in WorkflowRunManager.TERMINAL, state.startedAt, state.finishedAt)
+            manager.hasActiveResources(executionId), state.startedAt, state.finishedAt, manager.pendingCleanup.value.containsKey(executionId))
         // Read only log metadata. NEVER decode or return finalContextJson (logs, secrets, review tokens).
         val log = workflows.findExecutionById(executionId) ?: return null
         return AppAdminRunStatus(executionId, log.workflowId, "history-definition-not-exported", log.status,
-            false, log.startTime, log.endTime)
+            manager.hasActiveResources(executionId), log.startTime, log.endTime, manager.pendingCleanup.value.containsKey(executionId))
     }
-    override suspend fun start(definition: WorkflowDefinition, variables: Map<String, String>, workspace: String): AppAdminStart {
-        // Final defense: preflight does not confer authority to bypass start-time restrictions.
-        appAdminValidateNativeRun(definition)
-        val result = runManager().start(definition = definition, variables = variables, workspacePath = workspace)
+    override suspend fun start(definition: WorkflowDefinition, variables: Map<String, String>, workspace: String): AppAdminStart =
+        error("必须使用原生来源冻结执行租约")
+    override suspend fun startBound(definition: WorkflowDefinition, variables: Map<String, String>, source: AppAdminSource): AppAdminStart {
+        val manager = runManager()
+        appAdminValidateNativeRun(definition, manager.supportsBoundExecution)
+        val binding = requireNotNull(source.executionBinding) { "缺少原生目标和权限快照" }
+            .copy(definitionHash = definitionHash(definition))
+        binding.verify(definition)
+        val result = manager.start(definition = definition, variables = variables, workspacePath = source.workspace, binding = binding)
         return AppAdminStart(result.executionId, result.accepted)
     }
     override suspend fun stop(executionId: String) {
         val manager = runManager()
-        val handle = requireNotNull(manager.handle(executionId)) { "活动运行已不存在" }
-        require(handle.state.value.status !in WorkflowRunManager.TERMINAL) { "运行已结束" }
-        manager.cancel(executionId) // Native manager retains history and cleans managed processes.
+        require(manager.hasActiveResources(executionId)) { "无活动运行或待清理资源" }
+        manager.stop(executionId) // Wait for disposal; on failure keep pin and expose pending cleanup.
+        check(!manager.hasActiveResources(executionId)) { "资源仍未释放，请查看状态并重试清理；不会重跑业务" }
     }
 }, AppAdminAudit { session, action, detail ->
     audit.record(AgentApprovalAuditEntity(

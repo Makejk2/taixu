@@ -12,6 +12,7 @@ internal data class AppAdminSource(
     val runSupported: Boolean,
     val modelId: String? = null,
     val modelVariant: String? = null,
+    val executionBinding: top.wkbin.taixu.harness.workflow.WorkflowExecutionBinding? = null,
 )
 internal data class AppAdminRunStatus(
     val executionId: String,
@@ -21,6 +22,7 @@ internal data class AppAdminRunStatus(
     val active: Boolean,
     val startedAt: Long? = null,
     val finishedAt: Long? = null,
+    val cleanupPending: Boolean = false,
 )
 internal data class AppAdminStart(val executionId: String, val accepted: Boolean)
 internal interface AppAdminPort {
@@ -38,6 +40,8 @@ internal interface AppAdminPort {
         error("原生适配器不支持运行预检")
     suspend fun status(executionId: String): AppAdminRunStatus?
     suspend fun start(definition: WorkflowDefinition, variables: Map<String, String>, workspace: String): AppAdminStart
+    suspend fun startBound(definition: WorkflowDefinition, variables: Map<String, String>, source: AppAdminSource): AppAdminStart =
+        start(definition, variables, source.workspace)
     suspend fun stop(executionId: String)
 }
 internal fun interface AppAdminAudit {
@@ -72,12 +76,12 @@ internal fun appAdminLocalRunSupported(workspace: String, targetJson: String?, n
 }
 
 /** Keep the start-time final defense AND reject unsupported proposals before approval/audit. */
-internal fun appAdminValidateNativeRun(definition: WorkflowDefinition) {
+internal fun appAdminValidateNativeRun(definition: WorkflowDefinition, boundExecution: Boolean = false) {
     AppAdminSafety.runnableDefinition(definition)
-    require(definition.nodes.none { it.type in setOf(
+    require(definition.nodes.none { it.type == top.wkbin.taixu.core.model.workflow.WorkflowNodeType.HOST_ACTION || (!boundExecution && it.type in setOf(
         top.wkbin.taixu.core.model.workflow.WorkflowNodeType.BASH_COMMAND,
         top.wkbin.taixu.core.model.workflow.WorkflowNodeType.PROCESS_SERVICE,
         top.wkbin.taixu.core.model.workflow.WorkflowNodeType.TAIXU_BUILD,
         top.wkbin.taixu.core.model.workflow.WorkflowNodeType.HOST_ACTION,
-    ) }) { "此原生适配器尚无执行目标全程租约；含沙盒或宿主副作用节点请在工作流界面运行" }
+    )) }) { "缺少沙盒执行租约，或包含尚未接入权限门禁的宿主节点" }
 }

@@ -62,16 +62,12 @@ class LinuxRuntimeImpl(
     private val distroConfigurator: DistroConfigurator,
     private val logger: AppLogger,
 ) : LinuxRuntime {
-
     private val _state = MutableStateFlow<RuntimeState>(RuntimeState.NotInitialized)
     override val state: StateFlow<RuntimeState> = _state.asStateFlow()
-
     private val _activeDistroId = MutableStateFlow("ubuntu")
     override val activeDistroId: StateFlow<String> = _activeDistroId.asStateFlow()
-
     private val _installedDistros = MutableStateFlow<List<InstalledDistro>>(emptyList())
     override val installedDistros: StateFlow<List<InstalledDistro>> = _installedDistros.asStateFlow()
-
     private val initializeMutex = Mutex()
     private val storageActivities = StorageActivityGate()
     private val interactiveSessions = InteractiveSessionRegistry()
@@ -740,6 +736,10 @@ class LinuxRuntimeImpl(
         logger.i("Linux runtime shut down")
     } }
 
+    override suspend fun acquireExecutionTargetLease(distribution: String): AutoCloseable = storageActivities.acquireTarget(distribution) { distribution in pathManager.listInstalledDistroIds() }
+    override suspend fun <T> withExecutionTargetLease(distribution: String, block: suspend () -> T): T {
+        val pin = acquireExecutionTargetLease(distribution); try { return block() } finally { pin.close() }
+    }
     private suspend fun <T> withRuntimeMaintenance(block: suspend () -> T): T =
         withContext(Dispatchers.IO) { storageActivities.cleanup(block) }
 

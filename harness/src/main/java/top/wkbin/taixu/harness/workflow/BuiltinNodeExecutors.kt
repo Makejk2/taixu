@@ -1,5 +1,6 @@
 package top.wkbin.taixu.harness.workflow
 
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.coroutineScope
@@ -84,11 +85,13 @@ class LinuxNodeExecutor(
         context: WorkflowRuntimeContext,
         onProgress: suspend (NodeRunStatus, String) -> Unit,
     ): NodeExecutionOutput = withContext(Dispatchers.IO) {
+        val environment = currentCoroutineContext()[WorkflowExecutionContext]?.environment
         val commandLine = commandFor(node, context)
             ?: return@withContext NodeExecutionOutput(NodeRunStatus.FAILED, exitCode = 2, error = "节点缺少可执行配置")
         onProgress(NodeRunStatus.STREAMING, commandLine)
         if (node.type == WorkflowNodeType.PROCESS_SERVICE) {
-            val process = linuxRuntime.startBackground(
+            val process = if (environment != null) environment.startBackground(node.id,
+                ShellCommand(commandLine, workingDirectory = environment.workingDirectory())) else linuxRuntime.startBackground(
                 id = "workflow:${context.executionId}:${node.id}",
                 command = ShellCommand(commandLine, workingDirectory = context.workspacePath),
                 type = ProcessType.SERVICE,
@@ -109,8 +112,8 @@ class LinuxNodeExecutor(
                     if (snapshot.isNotBlank()) onProgress(NodeRunStatus.STREAMING, snapshot)
                 }
             }
-            try { linuxRuntime.execute(
-            ShellCommand(
+            try {
+            val command = ShellCommand(
                 commandLine = commandLine,
                 workingDirectory = node.config["workingDirectory"]?.let { interpolate(it, context) }
                     ?: context.workspacePath,
@@ -120,8 +123,10 @@ class LinuxNodeExecutor(
                     streamed.appendLine(line)
                     if (streamed.length > 2_000_000) streamed.delete(0, streamed.length - 2_000_000)
                 } },
-            ),
-            ) } finally { reporter.cancel() }
+            )
+            if (environment != null) environment.execute(command.copy(workingDirectory = environment.workingDirectory(command.workingDirectory)))
+            else linuxRuntime.execute(command)
+            } finally { reporter.cancel() }
         }
         val combined = buildString {
             append(streamed.toString())

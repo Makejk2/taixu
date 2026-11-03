@@ -29,6 +29,10 @@ class GroupGovernanceGuard(private val groups: GroupChatRepository, private val 
         if (runCatching { policy.validate(team) }.isFailure) return "审议成员或组织已变化，请在团队组中修正规则"
         val botId = task?.botId ?: bots.getBotBySessionId(sessionId)?.id
         if (botId !in team.memberIds) return "执行成员已移出群聊"
+        // Suggesting policy is not executing it: Team backend revalidates member identity and
+        // only the native owner can adopt a fresh proposal and explicitly approve mutation.
+        if (call.tool == HarnessTool.TEAM &&
+            (call.args["action"] as? JsonPrimitive)?.content in setOf("suggest", "suggestions")) return null
         if (call.tool in READ_ONLY) return null
         if (call.tool == HarnessTool.MCP && call.rawToolName == "use_capability") {
             val action = (call.args["action"] as? JsonPrimitive)?.content

@@ -133,3 +133,6 @@ status 仅返回运行元数据，历史读取完全不解码 finalContextJson�
 
 ## 并发一致性验证
 保存和删除已改为WorkflowDao同一Room写事务内按批准definitionHash比较并变更；并发原生编辑会使CAS拒绝，旧提案不重放。WorkflowDefinitionCasTest覆盖缺失创建、原生编辑、删除后复活、竞争提交以及历史级联语义；本地纯逻辑25项通过，真实Room及整包CI待核实。
+
+## 固定目标租约与资源清理（本轮在建）
+本轮将Bash/Process/Build工作流绑定到批准的本地distribution、workspace与定义hash；整段工作流持有runtime维护阻挡pin，原会话停止不改变独立生命周期。环境关闭失败时保留资源owner及pin，status.cleanupPending=true，stop只重试清理不重跑业务，直到清理成功才解除维护保护。人工审批等待仍保持绑定。Agent/subagent/Host执行权限适配尚待后续，不提前声称支持。

@@ -75,6 +75,13 @@ interface LinuxRuntime {
     fun getBackgroundLogs(idOrToolId: String): List<String> = emptyList()
     fun clearBackgroundLogs(idOrToolId: String) = Unit
 
+    /** Caller retains this idempotent pin until ALL owned resources have closed successfully. */
+    suspend fun acquireExecutionTargetLease(distribution: String): AutoCloseable =
+        error("当前运行时未提供可保留的执行目标租约")
+
+    /** Lexical convenience only: resource owners with retryable cleanup must use acquire instead. */
+    suspend fun <T> withExecutionTargetLease(distribution: String, block: suspend () -> T): T =
+        error("当前运行时未提供执行目标租约")
     suspend fun shutdown()
     /** Execute file cleanup only while runtime launches and installation are excluded. */
     suspend fun withStorageCleanup(block: suspend () -> Unit) {

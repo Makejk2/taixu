@@ -11,7 +11,7 @@ import top.wkbin.taixu.harness.*
 import top.wkbin.taixu.harness.bot.IndependentTeamStart
 
 class TeamServiceTest {
-    private class Port : TeamPort {
+    internal class Port : TeamPort {
         val rows = linkedMapOf<String, BotMemberGroup>()
         val groups = linkedMapOf<String, GroupChat>()
         var writes = 0
@@ -43,6 +43,7 @@ class TeamServiceTest {
             writes++; return v
         }
         override suspend fun group(id: String) = groups[id]
+        override suspend fun createOwnedGroup(group: GroupChat, teamId: String, sourceSessionId: String) = createGroup(group, teamId)
         override suspend fun createGroup(group: GroupChat, teamId: String) { groups[group.id] = group; writes++ }
         override suspend fun startSourceSnapshot(sessionId: String) = "$sessionId:$sourceVersion"
         private val starter = IndependentTeamStart(object : IndependentTeamStart.Port {

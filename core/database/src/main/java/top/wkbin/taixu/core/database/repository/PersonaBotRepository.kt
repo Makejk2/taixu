@@ -56,6 +56,7 @@ interface GroupChatRepository : GroupDeliveryRepository, GroupRoundRepository, G
     suspend fun saveIndependentTeam(team: top.wkbin.taixu.core.model.bot.BotMemberGroup) { error("团队组保存不可用") }
     suspend fun attachTeam(groupId: String, teamId: String) { error("团队组引用不可用") }
     suspend fun createReferencedGroup(group: GroupChat, teamId: String) { error("团队建群不可用") }
+    suspend fun createOwnedReferencedGroup(group: GroupChat, teamId: String, sourceSessionId: String) { error("可信团队建群不可用") }
     suspend fun installTeamTemplate(group: GroupChat, members: List<String>, supervisors: Map<String, String>,
         policy: top.wkbin.taixu.core.model.bot.GroupGovernance, createNew: Boolean) { error("团队模板导入不可用") }
     fun observeGroups(): Flow<List<GroupChat>>
@@ -164,6 +165,8 @@ class RoomGroupChatRepository(
     }
     override suspend fun attachTeam(groupId: String, teamId: String) = dao.syncDefinitionToChat(groupId, teamId)
     override suspend fun createReferencedGroup(group: GroupChat, teamId: String) = dao.createReferencedGroup(group.toEntity(), teamId)
+    override suspend fun createOwnedReferencedGroup(group: GroupChat, teamId: String, sourceSessionId: String) =
+        dao.createOwnedReferencedGroup(group.toEntity(), teamId, sourceSessionId)
     private val reactionMutex = Mutex()
     override suspend fun getTeam(groupId: String): top.wkbin.taixu.core.model.bot.GroupTeam =
         dao.effectiveTeam(groupId)

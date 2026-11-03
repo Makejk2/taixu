@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import top.wkbin.taixu.core.model.bot.BotWorkBatch
 
 @Dao
-interface BotAssignmentDao : TeamCommunicationDao, NativeTeamStartDao, GroupDeliveryDao, BotAssignmentRequestDao, AssignmentHierarchyDao, TaskBudgetDao, GroupGovernanceDao, AssignmentWorkDao {
+interface BotAssignmentDao : TeamOwnershipDao, TeamCommunicationDao, NativeTeamStartDao, GroupDeliveryDao, BotAssignmentRequestDao, AssignmentHierarchyDao, TaskBudgetDao, GroupGovernanceDao, AssignmentWorkDao {
     @Transaction
     suspend fun sendCommunication(sourceSession: String, targetId: String, body: String, messageId: String, now: Long): top.wkbin.taixu.core.model.bot.TeamCommunicationReceipt =
         sendCommunicationNative(sourceSession, targetId, body, messageId, now)
@@ -60,6 +60,7 @@ interface BotAssignmentDao : TeamCommunicationDao, NativeTeamStartDao, GroupDeli
         val team = effectiveTeam(group)
         if (trustedNativeTeamStart) {
             validateNativeTeamRoot(task, session, batch, sourceSessionId, dispatchOperationId, group, team)
+            bindNativeRootOwner(group, requireNotNull(task.rootWorkId), requireNotNull(sourceSessionId))
         } else {
             require(team.canAssign(task.reportToBotId, task.botId) || governance(group).canRoute(task.reportToBotId, task.botId)) { "只能向本群直属下级派发新任务" }
         }

@@ -202,3 +202,8 @@
 `team status(groupId)`含通信policy/revision/charged/held。调整使用`team propose(reason,operation={op:"communication-policy",groupId,expectedRevision,policy:{groupLimit,memberLimit,maxHop,rateLimit,rateWindowMs,queueLimit,unlimitedExplicit}})`，再由用户原生批准`apply`。8/64仅默认预算，不是永久能力上限；允许用户明确批准group/member累计0(不设累计上限)，仍保留正速率与队列背压。超额消息存held，原群原成员任务继续保留，扩额后续投不要求重建团队；取消/删除/成员版本失效消息终止且不自动复活。
 
 SQLite85→86新增消息账本与策略表并导入旧peer记录，不重放旧请求。当前SQL烟雾验证不能代替Room迁移，86.json必须由CI KSP生成并运行MigrationTestHelper后取得。待验证项包括65条跨窗口分页、旧held晚释放不漏读、双方RUNNING互读、并发额度和幂等。
+
+## 持久成员建议（本轮集成中，不等于已验收）
+成员`team suggest(groupId,idempotencyKey,reason,operation)`保存自己本组建议，`suggestions`只读本人记录；原生所属主用户采纳`adopt`会生成新的主用户会话proposal，仍必须再`apply`经原生确认，不能把建议当批准。源任务revision/teamBinding/成员行stamp在建议、采纳事务和prepare/apply边界复核，失效提案永久消费；reject可清理失效建议。共享父会话的后台Lane必须通过operation日志身份门禁，不得冒充主用户采纳。
+
+旧群没有可靠历史owner时，`reauthorize-group`仅生成原生接管提案，冻结完整group/root/session快照；用户明确批准后CAS写入新的归属，不伪造历史、不复活终止任务。86→87数据库迁移与Room定向测试待本轮CI；无手写schema身份哈希。

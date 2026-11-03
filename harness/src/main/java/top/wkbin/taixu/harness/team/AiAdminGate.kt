@@ -10,7 +10,7 @@ internal fun aiAdminRequiresEnabled(tool: String, args: JsonObject): Boolean {
         return action !in setOf("list", "get", "status")
     if (tool == "app_config") return action !in setOf("list", "get", "grants", "revoke", "modules", "inspect_module")
     if (tool == "team") {
-        if (action in setOf("list", "get", "status", "proposal", "apply")) return false
+        if (action in setOf("list", "get", "status", "proposal", "suggestions", "apply")) return false
         val op = (args["operation"] as? JsonObject)?.get("op") as? JsonPrimitive
         return action != "propose" || op?.content != "stop"
     }

@@ -5,6 +5,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class StorageActivityGateTest {
+    @Test fun explicitPinIsIdempotentAndProtectsOtherOwners() = runBlocking {
+        val gate = StorageActivityGate()
+        val first = gate.acquire()
+        val second = gate.acquire()
+        first.close(); first.close()
+        assertTrue(runCatching { gate.cleanup { fail("second pin was lost") } }.isFailure)
+        second.close(); second.close()
+        gate.cleanup { assertTrue(runCatching { gate.acquire() }.isFailure) }
+        assertTrue(runCatching { gate.acquireTarget("missing") { false } }.isFailure)
+        gate.cleanup { }
+    }
+
     @Test fun maintenanceReturnsResultAndRejectsNewCommandsUntilItFinishes() = runBlocking {
         val gate = StorageActivityGate()
         val entered = CompletableDeferred<Unit>()

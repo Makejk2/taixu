@@ -85,7 +85,7 @@ jobs:
         env:
           TAIXU_DEV_BUILD: "1"
         run: |
-          ./gradlew :core:database:testDebugUnitTest --tests '*TeamCommunication*' :harness:testDebugUnitTest --tests '*IndependentMemberInboxTest' --tests '*BotAssignmentRuntimeTest' --tests '*TeamCommunicationBudgetTest' --tests '*TeamServiceTest' --no-daemon --stacktrace --continue
+          ./gradlew :core:database:testDebugUnitTest --tests '*TeamSuggestion*' --tests '*TeamCommunication*' :runtime:testDebugUnitTest --tests '*StorageActivityGateTest' :harness:testDebugUnitTest --tests '*TeamSuggestionTest' --tests '*TeamServiceTest' --tests '*ManagementActorGuardTest' --tests '*GroupGovernanceGuardTest' --tests '*BotAssignmentRuntimeTest' --tests '*WorkflowExecutionLeaseTest' --tests '*WorkflowCleanupRunManagerTest' --tests '*WorkflowRunManagerTest' --tests '*AppAdminServiceTest' --tests '*ContextWindowPolicyTest' --no-daemon --stacktrace --continue
 
       - name: Run Debug Unit Tests
         if: github.event_name == 'workflow_dispatch' && inputs.full_validation == true

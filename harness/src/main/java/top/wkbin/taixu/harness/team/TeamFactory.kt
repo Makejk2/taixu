@@ -26,6 +26,8 @@ fun createTeamBackend(
     audit: AgentApprovalAuditRepository,
     // Must be wired by the application. Missing trusted source infrastructure fails closed.
     sessions: HarnessSessionRepository? = null,
+    suggestions: top.wkbin.taixu.core.database.TeamSuggestionRepository? = null,
+    managementEnabled: suspend () -> Boolean = { false },
 ): TeamToolBackend = TeamToolBackend(TeamService(object : TeamPort {
     private suspend fun source(sessionId: String) = requireNotNull(
         requireNotNull(sessions) { "团队启动尚未装配可信会话仓库，未启动任何成员" }.findById(sessionId)
@@ -96,6 +98,8 @@ fun createTeamBackend(
     override suspend fun publish(id: String, revision: Int) = teams.publish(id, revision, emptySet())
     override suspend fun group(id: String) = groups.getGroup(id)
     override suspend fun createGroup(group: GroupChat, teamId: String) = groups.createReferencedGroup(group, teamId)
+    override suspend fun createOwnedGroup(group: GroupChat, teamId: String, sourceSessionId: String) =
+        groups.createOwnedReferencedGroup(group, teamId, sourceSessionId)
     override suspend fun start(request: IndependentTeamStart.Request): IndependentTeamStart.Result {
         val actual = requireNotNull(groups.getGroup(request.groupId)) { "群聊不存在" }
         require(actual.teamGroupId == request.published.teamId && actual.teamVersion == request.published.version) { "群聊发布版本不一致" }
@@ -142,4 +146,4 @@ fun createTeamBackend(
         kind = "team_$action", toolName = TeamToolSpec.name,
         detail = detail, createdAt = System.currentTimeMillis(),
     ))
-}))
+}, suggestions = suggestions, managementEnabled = managementEnabled))

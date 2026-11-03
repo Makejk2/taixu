@@ -80,6 +80,7 @@ class ToolExecutor(
     private val governanceGuard: top.wkbin.taixu.harness.bot.GroupGovernanceGuard? = null,
     private val environments: top.wkbin.taixu.harness.environment.SessionExecutionEnvironments? = null,
     private val appConfigBackend: top.wkbin.taixu.harness.config.AppConfigToolBackend? = null,
+    private val managementActorGuard: top.wkbin.taixu.harness.admin.ManagementActorGuard? = null,
     private val workflowAdminBackend: top.wkbin.taixu.harness.admin.AppAdminBackend? = null,
     private val teamBackend: top.wkbin.taixu.harness.team.TeamToolBackend? = null,
     private val appModulesBackend: (suspend (String) -> top.wkbin.taixu.harness.directory.AppModulesToolBackend)? = null,
@@ -106,7 +107,6 @@ class ToolExecutor(
         searchRedactor = { session, workspace -> top.wkbin.taixu.harness.environment.executionOutputRedactor(
             secretRedactor, environments, linuxEnvironmentManager, settingsDataStore, session, workspace) },
     )
-
     private val executionBoundary = ToolExecutionBoundary(toolCheckpoints) { request, output ->
         val redacted = top.wkbin.taixu.harness.environment.redactExecutionOutput(output, secretRedactor,
             environments, linuxEnvironmentManager, settingsDataStore, request.sessionId, request.workspace)
@@ -115,7 +115,6 @@ class ToolExecutor(
             if (environments != null) environments.environment(request.sessionId, request.workspace).artifacts
             else if (request.workspace.isNotBlank()) top.wkbin.taixu.harness.environment.LocalExecutionArtifacts(fileAccess.withBase(request.workspace)) else null)
     }
-
     suspend fun execute(
         toolCall: ToolCall,
         sessionId: String = "",
@@ -148,6 +147,7 @@ class ToolExecutor(
         operationId: String? = null,
     ): ToolResult {
         val now = System.currentTimeMillis()
+        managementActorGuard?.rejection(toolCall, sessionId, operationId, allowApprovalRequest)?.let { return it }
         if (toolCall.tool == HarnessTool.APP_CONFIG && toolCall.args["action"]?.jsonPrimitive?.content in setOf("modules", "inspect_module"))
             return top.wkbin.taixu.harness.directory.executeAppModules(sessionId, toolCall, now,
                 { sessionDao?.findById(it) != null }, appModulesBackend)

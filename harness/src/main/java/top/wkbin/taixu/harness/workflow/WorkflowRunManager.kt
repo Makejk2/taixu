@@ -45,6 +45,7 @@ class WorkflowRunManager(
     private val linuxRuntime: LinuxRuntime,
     private val json: Json,
     private val logger: AppLogger,
+    private val executionLeases: WorkflowExecutionLeases? = null,
 ) {
     internal constructor(
         scheduler: WorkflowScheduler,
@@ -86,9 +87,33 @@ class WorkflowRunManager(
     fun approvalRequestFor(executionId: String): StateFlow<WorkflowApprovalRequest?> =
         handles[executionId]?.approvalRequest ?: MutableStateFlow(null)
 
+    /** Business terminal state alone does not mean that owned resources have stopped. */
+    val pendingCleanup: StateFlow<Map<String, String>> = executionLeases?.pendingCleanup ?: MutableStateFlow(emptyMap())
+    fun hasActiveResources(executionId: String): Boolean =
+        executionLeases?.hasResources(executionId) == true || handles[executionId]?.settled == false
+
     fun cancel(executionId: String) {
         handles[executionId]?.cancel()
+        runScope.launch {
+            try { stop(executionId) } catch (failure: Exception) {
+                logger.e("工作流资源清理失败：$executionId", failure)
+            }
+        }
+    }
+
+    /** May be called again after a terminal business result. Cleanup only; never resumes nodes. */
+    suspend fun stop(executionId: String) {
+        val handle = handles[executionId]
+        handle?.cancel()
+        while (handle != null && !handle.settled) delay(10)
+        retryCleanup(executionId)
         stopManagedProcesses(executionId)
+    }
+
+    suspend fun retryCleanup(executionId: String): Boolean {
+        val released = executionLeases?.retryCleanup(executionId) ?: true
+        if (released) handles[executionId]?.let(::finishRun)
+        return released
     }
 
     fun decide(executionId: String, nodeId: String, approved: Boolean, variables: Map<String, String> = emptyMap(), reviewToken: String? = null): Boolean =
@@ -98,12 +123,17 @@ class WorkflowRunManager(
      * 启动一次运行。运行时未就绪（未安装沙箱/等待超时）时不启动调度，
      * 而是落一条 FAILED 历史便于用户与定时计划看到原因。
      */
+    val supportsBoundExecution: Boolean get() = executionLeases != null
+
     suspend fun start(
         definition: WorkflowDefinition,
         variables: Map<String, String> = emptyMap(),
         workspacePath: String,
         trigger: WorkflowRunTrigger = WorkflowRunTrigger.Manual,
+        binding: WorkflowExecutionBinding? = null,
     ): WorkflowStartResult {
+        binding?.verify(definition)
+        check(binding == null || (executionLeases != null && workspacePath == binding.workspace)) { "缺少工作流执行租约或工作区不匹配" }
         if (linuxRuntime.state.value !is RuntimeState.Ready) {
             awaitRuntimeReady()?.let { failure ->
                 val executionId = "wf_${UUID.randomUUID()}"
@@ -119,14 +149,15 @@ class WorkflowRunManager(
         }
         val handle = scheduler.execute(definition, variables, workspacePath, runScope,
             checkpoint = durableCheckpoint(trigger.triggerSource, (trigger as? WorkflowRunTrigger.Schedule)?.scheduleId),
-            environmentId = linuxRuntime.activeDistroId.value)
+            environmentId = binding?.encode() ?: linuxRuntime.activeDistroId.value,
+            executionLease = binding?.let { frozen -> { id, run -> executionLeases!!.use(id, frozen, run) } })
         return register(handle, trigger)
     }
 
     /** Explicit continuation of the stored definition; retries must match the reviewed snapshot. */
     suspend fun resume(executionId: String, retryNodeIds: Set<String>, expectedResumeCount: Int, expectedJournalSize: Int): WorkflowStartResult = resumeLock.withLock {
         fun rejected(message: String) = WorkflowStartResult(executionId, message)
-        if (executionId in runningIds || handles[executionId]?.settled == false) return@withLock rejected("此运行正在执行或收尾，请勿重复继续")
+        if (executionId in runningIds || hasActiveResources(executionId)) return@withLock rejected("此运行正在执行或收尾，请勿重复继续")
         val row = repository.findExecutionById(executionId) ?: return@withLock rejected("运行记录不存在")
         val snapshot = runCatching { json.decodeFromString<WorkflowRuntimeState>(row.finalContextJson) }.getOrNull()
             ?: return@withLock rejected("运行记录无法读取")
@@ -136,7 +167,10 @@ class WorkflowRunManager(
         if (!plan.canResume) return@withLock rejected(plan.blockedReason!!)
         if (retryNodeIds != plan.retryNodeIds) return@withLock rejected("请逐个确认所有失败或结果不确定的节点；不允许重试已完成节点")
         if (linuxRuntime.state.value !is RuntimeState.Ready) return@withLock rejected("Linux 沙箱尚未就绪，请就绪后继续")
-        if (snapshot.runtimeEnvironmentId != linuxRuntime.activeDistroId.value) return@withLock rejected("当前发行版与原运行不同，请先切回原发行版")
+        val binding = try { WorkflowExecutionBinding.decode(snapshot.runtimeEnvironmentId)?.also { it.verify(snapshot.definition) } }
+            catch (error: Exception) { return@withLock rejected(error.message ?: "执行目标记录无效") }
+        if (binding != null && executionLeases == null) return@withLock rejected("工作流执行租约不可用")
+        if (binding == null && snapshot.runtimeEnvironmentId != linuxRuntime.activeDistroId.value) return@withLock rejected("当前发行版与原运行不同，请先切回原发行版")
         val interrupted = snapshot.journal.groupBy { it.nodeId }.values.map { it.last() }.filter { it.kind == WorkflowJournalKind.STARTED }
         val journal = snapshot.journal + interrupted.mapIndexed { index, entry ->
             WorkflowJournalEntry(snapshot.journal.size + index + 1, entry.nodeId, entry.attempt, WorkflowJournalKind.INTERRUPTED, System.currentTimeMillis())
@@ -148,7 +182,8 @@ class WorkflowRunManager(
             journal = journal, resumeCount = snapshot.resumeCount + 1)
         val trigger = row.scheduleId?.takeIf { row.triggerSource == "SCHEDULE" }?.let { WorkflowRunTrigger.Schedule(it) } ?: WorkflowRunTrigger.Manual
         register(scheduler.execute(snapshot.definition, emptyMap(), context.workspacePath, runScope,
-            checkpoint = durableCheckpoint(row.triggerSource, row.scheduleId), restored = restored), trigger)
+            checkpoint = durableCheckpoint(row.triggerSource, row.scheduleId), restored = restored,
+            executionLease = binding?.let { frozen -> { id, run -> executionLeases!!.use(id, frozen, run) } }), trigger)
     }
 
     private fun durableCheckpoint(source: String, scheduleId: String?): suspend (WorkflowRuntimeState) -> Unit = { state ->
@@ -210,6 +245,11 @@ class WorkflowRunManager(
                 }
                 terminal
             }
+            // A terminal node result can precede environment/process teardown. Persist the settled
+            // result too: cleanup failure must not be reported as a successful independent run.
+            while (!handle.settled) delay(10)
+            _activeRuns.update { it + (executionId to handle.state.value) }
+            historyWriter.save(handle.state.value, source, scheduleId)
         } finally {
             approvalJob.cancel()
             finishRun(handle)
@@ -218,6 +258,7 @@ class WorkflowRunManager(
 
     private fun finishRun(handle: WorkflowRunHandle) {
         val executionId = handle.state.value.executionId
+        if (hasActiveResources(executionId)) return // Retain handle and running indicator until cleanup succeeds.
         if (runningIds.remove(executionId)) {
             _running.value = runningIds.isNotEmpty()
             _pendingApprovals.update { it - executionId }

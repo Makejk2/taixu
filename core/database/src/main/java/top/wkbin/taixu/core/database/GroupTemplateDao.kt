@@ -4,7 +4,12 @@ import androidx.room.*
 import top.wkbin.taixu.core.model.bot.GroupGovernance
 
 @Dao
-interface GroupTemplateDao : GroupGovernanceDao, TeamDefinitionDao {
+interface GroupTemplateDao : TeamOwnershipDao, GroupGovernanceDao, TeamDefinitionDao {
+    @Transaction suspend fun createOwnedReferencedGroup(group: GroupChatEntity, teamId: String, sourceSessionId: String) {
+        verifyMainUser(sourceSessionId)
+        createReferencedGroup(group, teamId)
+        insertTeamGroupOwner(TeamGroupOwnerEntity(group.id, sourceSessionId))
+    }
     @Query("SELECT * FROM group_chats WHERE id = :id LIMIT 1")
     suspend fun templateGroup(id: String): GroupChatEntity?
     @Upsert suspend fun publishTemplateGroup(group: GroupChatEntity)

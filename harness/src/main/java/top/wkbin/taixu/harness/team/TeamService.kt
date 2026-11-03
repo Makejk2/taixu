@@ -14,12 +14,16 @@ internal class TeamService(
     private val port: TeamPort,
     private val journal: TeamAudit,
     private val clock: () -> Long = System::currentTimeMillis,
+    private val suggestions: top.wkbin.taixu.core.database.TeamSuggestionRepository? = null,
+    private val managementEnabled: suspend () -> Boolean = { true },
 ) {
     private data class Proposal(val id: String, val session: String, val reason: String,
         val operation: JsonObject, val before: String, val createdAt: Long,
+        val suggestionId: String? = null, val suggestionGroupId: String? = null,
         var pendingCall: String? = null, var consumed: Boolean = false)
     private val lock = Mutex()
     private val proposals = LinkedHashMap<String, Proposal>()
+    private val suggestionService = TeamSuggestions(suggestions, port, clock, managementEnabled, ::validate, ::before, ::audit)
 
     suspend fun disableManagement() = lock.withLock { proposals.entries.removeAll { text(it.value.operation, "op") != "stop" } }
 
@@ -40,6 +44,7 @@ internal class TeamService(
     private fun describe(p: Proposal) = buildString {
         appendLine("proposalId：${p.id}")
         appendLine("reason：${p.reason}")
+        p.suggestionId?.let { appendLine("suggestionId：$it") }
         appendLine("snapshotSha256：${hash(p.operation.toString() + "\n" + p.before)}")
         appendLine("operation：${p.operation}")
         appendLine("before：${p.before}")
@@ -55,12 +60,29 @@ internal class TeamService(
 
     suspend fun execute(session: String, args: JsonObject): String = lock.withLock {
         when (required(args, "action")) {
+            "suggest", "suggestions", "adopt", "reject" -> {
+                var adopted: Proposal? = null
+                val output = suggestionService.execute(session, args) { row ->
+                    owner(session)
+                    proposals.entries.removeAll { it.value.consumed || clock() - it.value.createdAt > TTL }
+                    require(proposals.size < 256) { "待审批提案过多" }
+                    val p = Proposal(UUID.randomUUID().toString(), session, row.reason,
+                        Json.parseToJsonElement(row.operationJson).jsonObject, row.beforeSnapshot, clock(), row.id, row.groupId)
+                    audit(session, "proposed_from_suggestion", "${row.id}\n${describe(p)}")
+                    adopted = p
+                    p.id to describe(p)
+                }
+                // Retain only after the durable pending -> adopted CAS succeeds. Crash means re-suggest, not replay.
+                adopted?.let { proposals[it.id] = it }
+                output
+            }
             "list" -> port.teams().joinToString("\n", transform = ::render).ifEmpty { "暂无持久团队" }
             "get" -> render(team(required(args, "teamId")))
             "status" -> port.status(required(args, "groupId"))
             "proposal" -> describe(proposal(session, required(args, "proposalId")))
             "propose" -> {
                 owner(session)
+                require(managementEnabled() || text(args["operation"]?.jsonObject ?: JsonObject(emptyMap()), "op") == "stop") { "AI 超级管理已关闭" }
                 val reason = required(args, "reason").also { require(it.length <= 4000) { "reason 过长" } }
                 val raw = requireNotNull(args["operation"]) { "缺少 operation" }
                 require(raw.toString().length <= 100_000) { "团队提案过大" }
@@ -89,7 +111,9 @@ internal class TeamService(
     suspend fun prepare(session: String, id: String, callId: String): String = lock.withLock {
         owner(session)
         val p = proposal(session, id)
-        if (before(p.operation, session) != p.before) {
+        verifySuggestion(p)
+        require(managementEnabled() || text(p.operation, "op") == "stop") { "AI 超级管理已关闭" }
+        if (currentBefore(p) != p.before) {
             p.consumed = true
             p.pendingCall = null
             audit(session, "invalidated", p.id)
@@ -105,8 +129,10 @@ internal class TeamService(
     suspend fun applyNative(session: String, id: String, callId: String): String = lock.withLock {
         owner(session)
         val p = proposal(session, id)
+        verifySuggestion(p)
+        require(managementEnabled() || text(p.operation, "op") == "stop") { "AI 超级管理已关闭" }
         require(p.pendingCall == callId) { "没有匹配当前调用的原生审批请求" }
-        if (before(p.operation, session) != p.before) {
+        if (currentBefore(p) != p.before) {
             p.consumed = true
             p.pendingCall = null
             audit(session, "invalidated", p.id)
@@ -117,7 +143,9 @@ internal class TeamService(
         audit(session, "applying", describe(p))
         p.consumed = true
         try {
-            val output = mutate(p.operation, session, p.id)
+            // Recheck after suspending validation/audit, immediately before the first side effect.
+            verifySuggestion(p)
+            val output = mutate(p.operation, session, p.id, p.before)
             audit(session, "applied", "${p.id}\n$output")
             output
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -127,7 +155,31 @@ internal class TeamService(
         }
     }
 
+    private suspend fun currentBefore(p: Proposal): String = try { before(p.operation, p.session) }
+    catch (e: CancellationException) { throw e }
+    catch (e: Exception) {
+        // Ownership contention/missing facts must invalidate just like a changed snapshot.
+        p.consumed = true
+        p.pendingCall = null
+        audit(p.session, "invalidated", "${p.id}: ${e.message}")
+        throw e
+    }
+
+    private suspend fun verifySuggestion(p: Proposal) {
+        val id = p.suggestionId ?: return
+        try {
+            requireNotNull(suggestions).verifyAdoptedSource(p.session, requireNotNull(p.suggestionGroupId), id, p.id)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (e: Exception) {
+            p.consumed = true
+            p.pendingCall = null
+            audit(p.session, "suggestion_source_invalidated", "$id:${p.id}")
+            error("建议来源已失效；提案永久消费，禁止重放。${e.message}")
+        }
+    }
+
     private suspend fun before(op: JsonObject, session: String): String = when (text(op, "op")) {
+        "reauthorize-group" -> requireNotNull(suggestions) { "旧群接管未装配" }.legacyOwnershipSnapshot(session, required(op, "groupId"))
         "create" -> "new-team:${required(op, "teamId")};existingMembers:${memberState(members(op))}"
         "communication-policy" -> Json.encodeToString(requireNotNull(port.group(required(op, "groupId"))) { "群聊不存在" }) +
             "\ncommunication:" + port.communicationSnapshot(required(op, "groupId")).let { "${it.revision}:${Json.encodeToString(it.policy)}" }
@@ -145,11 +197,12 @@ internal class TeamService(
             "publish" -> setOf("op", "teamId", "expectedRevision")
             "start" -> setOf("op", "teamId", "groupId", "name", "task", "members")
             "communication-policy" -> setOf("op", "groupId", "expectedRevision", "policy")
-            "stop" -> setOf("op", "groupId")
+            "stop", "reauthorize-group" -> setOf("op", "groupId")
             else -> error("未知团队操作")
         }
         require(op.keys.all { it in allowed }) { "不支持的操作参数；不能修改权限或审批模式" }
         when (text(op, "op")) {
+            "reauthorize-group" -> { required(op, "groupId") }
             "create" -> {
                 require(text(op, "name").isNotBlank() && text(op, "name").length <= 100) { "团队名称须为1至100字" }
                 val specs = specs(op)
@@ -225,7 +278,11 @@ internal class TeamService(
     private fun communicationPolicy(op: JsonObject): TeamCommunicationPolicy =
         Json.decodeFromJsonElement(requireNotNull(op["policy"]) { "缺少 policy" })
 
-    private suspend fun mutate(op: JsonObject, session: String, proposalId: String): String = when (text(op, "op")) {
+    private suspend fun mutate(op: JsonObject, session: String, proposalId: String, expected: String): String = when (text(op, "op")) {
+        "reauthorize-group" -> {
+            requireNotNull(suggestions).reauthorizeLegacyGroup(session, required(op, "groupId"), expected, proposalId)
+            "legacy reauthorized（非历史归属）：groupId=${required(op, "groupId")}，owner 主会话=$session；来源 workspace 见批准快照。仅登记群/可核验根任务归属，未激活任务、恢复旧批准或 cancelled 执行。"
+        }
         "communication-policy" -> {
             val groupId = required(op, "groupId")
             port.communicationPolicy(groupId, revision(op), communicationPolicy(op), session, proposalId)
@@ -244,7 +301,7 @@ internal class TeamService(
             val id = required(op, "groupId")
             val group = GroupChat(id, text(op, "name").ifBlank { published.name }, published.definition.adminBotId,
                 createdAt = clock(), teamGroupId = t.id, teamVersion = published.version)
-            port.createGroup(group, t.id)
+            port.createOwnedGroup(group, t.id, session)
             val actual = requireNotNull(port.group(id))
             require(actual.teamGroupId == t.id && actual.teamVersion == published.version) { "发布版本竞态；已建群 $id，但未启动，请核对" }
             val result = port.start(IndependentTeamStart.Request(id, session, "team-start:$proposalId", published, startMembers(op, published)))
@@ -293,6 +350,6 @@ internal class TeamService(
 
     companion object {
         private const val TTL = 15 * 60 * 1000L
-        private val WRITES = setOf("create", "draft", "publish", "start", "stop", "communication-policy")
+        private val WRITES = setOf("create", "draft", "publish", "start", "stop", "communication-policy", "reauthorize-group")
     }
 }

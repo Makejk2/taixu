@@ -62,6 +62,7 @@ class WorkflowScheduler(
         checkpoint: (suspend (WorkflowRuntimeState) -> Unit)? = null,
         restored: WorkflowRuntimeState? = null,
         environmentId: String? = null,
+        executionLease: (suspend (String, suspend () -> Unit) -> Unit)? = null,
     ): WorkflowRunHandle {
         require(restored == null || restored.definition == definition) { "恢复时不能替换工作流定义" }
         val executionId = restored?.executionId ?: "wf_${UUID.randomUUID()}"
@@ -76,7 +77,13 @@ class WorkflowScheduler(
         val cancelled = AtomicBoolean(false)
         val settled = AtomicBoolean(false)
         val job = scope.launch {
-            runWorkflow(executionId, definition, initialVariables, workspacePath, mutableState, journal, restored != null)
+            try {
+                val run: suspend () -> Unit = { runWorkflow(executionId, definition, initialVariables, workspacePath, mutableState, journal, restored != null) }
+                if (executionLease == null) run() else executionLease(executionId, run)
+            } catch (cancelled: CancellationException) { throw cancelled
+            } catch (error: Throwable) {
+                mutableState.update { it.copy(status = WorkflowRunStatus.FAILED, finishedAt = System.currentTimeMillis(), error = error.message ?: "执行租约失败") }
+            }
         }
         jobRef.set(job)
         if (cancelled.get()) job.cancel(CancellationException("用户取消工作流"))
@@ -227,10 +234,14 @@ class WorkflowScheduler(
                         }
                     } else executor.execute(node, context, onProgress)
                 }
+                val guarded: suspend () -> NodeExecutionOutput = {
+                    val lease = currentCoroutineContext()[WorkflowExecutionContext]
+                    if (lease == null) action() else lease.operation(state.value.definition) { action() }
+                }
                 if (timeoutMs == null) {
-                    action()
+                    guarded()
                 } else {
-                    withTimeoutOrNull(timeoutMs) { action() }
+                    withTimeoutOrNull(timeoutMs) { guarded() }
                         ?: NodeExecutionOutput(NodeRunStatus.FAILED, exitCode = 124, error = "节点超时（${timeoutMs / 1_000} 秒）")
                 }
             } catch (cancelled: CancellationException) {

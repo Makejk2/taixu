@@ -128,6 +128,11 @@ internal class AppAdminService(
                 appendLine("警告：删除定义会按现有数据库外键级联删除该定义的执行历史；停止不会删除历史。")
             }
             appendLine("sourceHash=${adminHash(p.source.toString())}; workspace=${p.source.workspace}")
+            appendLine("definitionHash=${p.definition?.let(::definitionHash) ?: p.before}")
+            p.source.executionBinding?.let { binding ->
+                appendLine("environment=${binding.target().distribution}; workspace=${binding.workspace}")
+                appendLine("approvalMode=${binding.approvalMode}; runMode=${binding.runMode}")
+            }
             appendLine("definition/target snapshotHash=${adminHash(p.before)}")
             appendLine("operationHash=${adminHash(p.operation.toString())}")
             p.operation["workflowId"]?.let { appendLine("workflowId=${it.jsonPrimitive.content}") }
@@ -153,7 +158,7 @@ internal class AppAdminService(
                     "已删除自定义工作流；现有仓库按外键级联删除该定义的历史，不会声称保留历史"
                 }
                 "run" -> {
-                    val started = port.start(requireNotNull(p.definition), p.variables, p.source.workspace)
+                    val started = port.startBound(requireNotNull(p.definition), p.variables, p.source)
                     buildJsonObject {
                         put("executionId", started.executionId); put("accepted", started.accepted)
                         put("note", if (started.accepted) "原生受理，非完成；请 status 查询，节点审批仍走原生 UI" else "原生拒绝启动；可能已记录 FAILED 历史，请 status 核对")
