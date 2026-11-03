@@ -34,9 +34,9 @@ class AppModuleDirectory(
     ) {
         companion object {
             /**
-             * Registry has no structured schema getter. Schemas may only come from the owning
-             * registered HarnessPlugin.tools snapshot; absent schemas remain explicitly unknown.
-             * Never parse registry.inspect(): it is truncated, human-readable text.
+             * Schemas may only come from the owning registered HarnessPlugin.tools snapshot
+             * (see HarnessPluginRegistry.registeredToolSchemas). Absent schemas stay explicitly
+             * unknown. Never parse registry.inspect(): it is truncated, human-readable text.
              */
             fun fromRegisteredDescriptor(
                 descriptor: PluginDescriptor,
