@@ -1,70 +1,41 @@
 package top.wkbin.taixu.core.database
 
-import androidx.room.ColumnInfo
 import androidx.room.Transaction
 import androidx.room.Dao
-import androidx.room.Entity
-import androidx.room.ForeignKey
-import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
-import androidx.room.PrimaryKey
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 import top.wkbin.taixu.core.model.bot.BotWorkBatch
 
-@Entity(
-    tableName = "bot_assignments",
-    foreignKeys = [
-        ForeignKey(
-            entity = GroupChatEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["groupId"],
-            onDelete = ForeignKey.CASCADE,
-        ),
-    ],
-    indices = [
-        Index(value = ["groupId", "createdAt"]),
-        Index(value = ["status"]),
-        Index(value = ["sessionId"]),
-        Index(value = ["batchId", "status"]),
-        Index(value = ["groupId", "rootWorkId", "stageId", "workItemId"], unique = true),
-    ],
-)
-data class BotAssignmentEntity(
-    @PrimaryKey val id: String,
-    val groupId: String?,
-    val botId: String,
-    val botName: String,
-    val title: String,
-    val task: String,
-    val status: String,
-    val writePathsJson: String,
-    val createdAt: Long,
-    val startedAt: Long,
-    val finishedAt: Long?,
-    val summary: String?,
-    val error: String?,
-    val sessionId: String?,
-    val laneName: String?,
-    @ColumnInfo(defaultValue = "NULL") val reportToBotId: String? = null,
-    @ColumnInfo(defaultValue = "0") val independent: Boolean = false,
-    @ColumnInfo(defaultValue = "0") val revision: Int = 0,
-    @ColumnInfo(defaultValue = "NULL") val activeRequestId: String? = null,
-    @ColumnInfo(defaultValue = "'[]'") val dependsOnJson: String = "[]",
-    @ColumnInfo(defaultValue = "NULL") val batchId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val parentAssignmentId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val budgetId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val proposalId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val proposalVersion: Int? = null,
-    @ColumnInfo(defaultValue = "NULL") val teamBinding: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val rootWorkId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val stageId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val workItemId: String? = null,
-)
-
 @Dao
-interface BotAssignmentDao : NativeTeamStartDao, GroupDeliveryDao, BotAssignmentRequestDao, AssignmentHierarchyDao, TaskBudgetDao, GroupGovernanceDao, AssignmentWorkDao {
+interface BotAssignmentDao : TeamCommunicationDao, NativeTeamStartDao, GroupDeliveryDao, BotAssignmentRequestDao, AssignmentHierarchyDao, TaskBudgetDao, GroupGovernanceDao, AssignmentWorkDao {
+    @Transaction
+    suspend fun sendCommunication(sourceSession: String, targetId: String, body: String, messageId: String, now: Long): top.wkbin.taixu.core.model.bot.TeamCommunicationReceipt =
+        sendCommunicationNative(sourceSession, targetId, body, messageId, now)
+
+    @Transaction
+    suspend fun communicationSnapshot(groupId: String): top.wkbin.taixu.core.model.bot.TeamCommunicationSnapshot =
+        communicationSnapshotNative(groupId)
+
+    /** Validation and write remain inside the owning Room transaction. */
+    @Transaction
+    suspend fun approveCommunicationPolicy(groupId: String, expectedRevision: Int,
+        policy: top.wkbin.taixu.core.model.bot.TeamCommunicationPolicy, sourceSession: String, approvalId: String, now: Long) =
+        approveCommunicationPolicyNative(groupId, expectedRevision, policy, sourceSession, approvalId, now)
+
+    /** Bounded transaction, not a quota: caller keyset-pages until empty, never drops held rows. */
+    @Transaction
+    suspend fun resumeCommunicationPage(groupId: String, after: Long, now: Long): Long? {
+        val rows = heldCommunications(groupId, after, 128)
+        rows.forEach { releaseCommunication(it, now) }
+        return rows.lastOrNull()?.sequence
+    }
+
+    @Transaction
+    suspend fun readCommunicationInbox(sourceSession: String, after: Long, limit: Int): List<top.wkbin.taixu.core.model.bot.TeamCommunicationMessage> =
+        readCommunicationInboxNative(sourceSession, after, limit)
+
     @Query("SELECT * FROM bot_assignments WHERE botId = :botId AND independent = 1")
     suspend fun assignmentsForBot(botId: String): List<BotAssignmentEntity>
 

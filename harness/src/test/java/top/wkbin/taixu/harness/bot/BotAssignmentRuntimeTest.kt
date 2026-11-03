@@ -184,6 +184,54 @@ class BotAssignmentRuntimeTest {
         while (tasks.get(id)?.status != expected) delay(10)
     }
 
+    @Test fun `running A and B read and reply inside their original native turns without settling queued mail`(): Unit = runBlocking {
+        seedPublishedTeam()
+        val aSession = CompletableDeferred<String>()
+        val bSession = CompletableDeferred<String>()
+        val aSent = CompletableDeferred<String>()
+        val bReplied = CompletableDeferred<String>()
+        val verified = CompletableDeferred<Unit>()
+        val entries = java.util.concurrent.atomic.AtomicInteger()
+        lateinit var engine: BotAssignmentRuntime
+        engine = runtime { task, request, admitted ->
+            entries.incrementAndGet()
+            val sid = requireNotNull(task.sessionId)
+            val accepted = control.submit(sid, request.instruction) as PromptSubmission.Accepted
+            admitted(accepted.taskId)
+            if (task.botId == "member") {
+                aSession.complete(sid)
+                val recipient = tasks.assignmentForSession(bSession.await())!!
+                aSent.complete(engine.sendMemberMessage(sid, recipient.id, "A asks B while still working", "a-to-b"))
+                val replyId = bReplied.await()
+                val inbox = engine.readMemberInbox(sid)
+                assertTrue(inbox.contains("B replies before either native turn completes"))
+                assertTrue(inbox.contains(replyId))
+                assertEquals(BotAssignmentRequest.PENDING, tasks.getRequest(replyId)!!.status)
+                assertEquals(request.id, tasks.get(task.id)!!.activeRequestId)
+                assertEquals(BotAssignmentStatus.RUNNING, tasks.get(recipient.id)!!.status)
+                assertEquals(2, entries.get())
+                verified.complete(Unit)
+            } else {
+                bSession.complete(sid)
+                val sender = tasks.assignmentForSession(aSession.await())!!
+                val mailId = aSent.await()
+                val inbox = engine.readMemberInbox(sid)
+                assertTrue(inbox.contains("A asks B while still working"))
+                assertTrue(inbox.contains(mailId))
+                assertEquals(BotAssignmentRequest.PENDING, tasks.getRequest(mailId)!!.status)
+                assertEquals(request.id, tasks.get(task.id)!!.activeRequestId)
+                bReplied.complete(engine.sendMemberMessage(sid, sender.id,
+                    "B replies before either native turn completes", "b-to-a"))
+            }
+            awaitCancellation()
+        }
+        engine.createApprovedTeamRoot("parent", "member", "group", "A private task", emptyList(), "inbox-op")
+        engine.createApprovedTeamRoot("parent", "second", "group", "B private task", emptyList(), "inbox-op")
+        withTimeout(10_000) { verified.await() }
+        assertEquals(SessionRunState.RUNNING, control.sessionRunStates.value[aSession.await()])
+        assertEquals(SessionRunState.RUNNING, control.sessionRunStates.value[bSession.await()])
+    }
+
     @Test fun `active followup queues without interrupting tools then reuses the same session and frozen target`(): Unit = runBlocking {
         seed()
         val entered = CompletableDeferred<Unit>()

@@ -129,6 +129,8 @@ internal class TeamService(
 
     private suspend fun before(op: JsonObject, session: String): String = when (text(op, "op")) {
         "create" -> "new-team:${required(op, "teamId")};existingMembers:${memberState(members(op))}"
+        "communication-policy" -> Json.encodeToString(requireNotNull(port.group(required(op, "groupId"))) { "群聊不存在" }) +
+            "\ncommunication:" + port.communicationSnapshot(required(op, "groupId")).let { "${it.revision}:${Json.encodeToString(it.policy)}" }
         "stop" -> Json.encodeToString(requireNotNull(port.group(required(op, "groupId"))) { "群聊不存在" })
         else -> team(required(op, "teamId")).let { render(it) + "\nmembers:" + memberState(it.memberIds + it.publishedSnapshot?.memberIds.orEmpty()) } +
             if (text(op, "op") == "start") "\nsource:" + port.startSourceSnapshot(session) else ""
@@ -142,6 +144,7 @@ internal class TeamService(
             "draft" -> setOf("op", "teamId", "expectedRevision", "name", "memberIds", "definition")
             "publish" -> setOf("op", "teamId", "expectedRevision")
             "start" -> setOf("op", "teamId", "groupId", "name", "task", "members")
+            "communication-policy" -> setOf("op", "groupId", "expectedRevision", "policy")
             "stop" -> setOf("op", "groupId")
             else -> error("未知团队操作")
         }
@@ -182,6 +185,12 @@ internal class TeamService(
                 val published = requireNotNull(t.publishedSnapshot)
                 port.validateStart(session, published, startMembers(op, published))
             }
+            "communication-policy" -> {
+                val groupId = required(op, "groupId")
+                require(requireNotNull(port.group(groupId)).teamGroupId != null) { "仅支持原有团队群" }
+                require(port.communicationSnapshot(groupId).revision == revision(op)) { "通信策略修订已变化" }
+                communicationPolicy(op).validate()
+            }
             "stop" -> {
                 val g = requireNotNull(port.group(required(op, "groupId"))) { "群聊不存在" }
                 require(g.teamGroupId != null) { "仅允许停止独立团队群聊" }
@@ -213,7 +222,15 @@ internal class TeamService(
         memberIds = if ("memberIds" in op) members(op) else old.memberIds,
         definition = if ("definition" in op) definition(op) else old.definition,
     )
+    private fun communicationPolicy(op: JsonObject): TeamCommunicationPolicy =
+        Json.decodeFromJsonElement(requireNotNull(op["policy"]) { "缺少 policy" })
+
     private suspend fun mutate(op: JsonObject, session: String, proposalId: String): String = when (text(op, "op")) {
+        "communication-policy" -> {
+            val groupId = required(op, "groupId")
+            port.communicationPolicy(groupId, revision(op), communicationPolicy(op), session, proposalId)
+            "已原生批准并持久保存通信策略；保留原群原任务，待额消息已尝试续送：${Json.encodeToString(port.communicationSnapshot(groupId))}"
+        }
         "create" -> create(op)
         "draft" -> {
             val next = draft(op, team(required(op, "teamId")))
@@ -276,6 +293,6 @@ internal class TeamService(
 
     companion object {
         private const val TTL = 15 * 60 * 1000L
-        private val WRITES = setOf("create", "draft", "publish", "start", "stop")
+        private val WRITES = setOf("create", "draft", "publish", "start", "stop", "communication-policy")
     }
 }

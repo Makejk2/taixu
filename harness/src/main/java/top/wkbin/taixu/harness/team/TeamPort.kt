@@ -22,6 +22,12 @@ internal interface TeamPort {
     suspend fun validateStart(sessionId: String, published: TeamPublishedVersion, members: List<IndependentTeamStart.Member>)
     suspend fun start(request: IndependentTeamStart.Request): IndependentTeamStart.Result
     suspend fun stop(groupId: String)
+    suspend fun communicationSnapshot(groupId: String): top.wkbin.taixu.core.model.bot.TeamCommunicationSnapshot =
+        error("持久通信仓库尚未装配")
+    suspend fun communicationPolicy(groupId: String, expectedRevision: Int,
+        policy: top.wkbin.taixu.core.model.bot.TeamCommunicationPolicy, sourceSession: String, approvalId: String) {
+        error("持久通信仓库尚未装配")
+    }
     suspend fun status(groupId: String): String
 }
 

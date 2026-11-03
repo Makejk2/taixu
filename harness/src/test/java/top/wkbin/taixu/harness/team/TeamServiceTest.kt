@@ -68,6 +68,14 @@ class TeamServiceTest {
             return starter.start(request)
         }
         override suspend fun stop(groupId: String) { stops++ }
+        var communication = TeamCommunicationSnapshot(TeamCommunicationPolicy(), 0, 0, 0)
+        override suspend fun communicationSnapshot(groupId: String) = communication
+        override suspend fun communicationPolicy(groupId: String, expectedRevision: Int, policy: TeamCommunicationPolicy,
+            sourceSession: String, approvalId: String) {
+            require(communication.revision == expectedRevision)
+            communication = communication.copy(policy=policy, revision=expectedRevision+1)
+            writes++
+        }
         override suspend fun status(groupId: String) = groups.getValue(groupId).toString()
     }
     private fun args(value: String) = Json.parseToJsonElement(value).jsonObject
@@ -82,6 +90,35 @@ class TeamServiceTest {
     private suspend fun commit(service: TeamService, session: String, proposal: String) {
         service.prepare(session, proposal, "native-call")
         service.applyNative(session, proposal, "native-call")
+    }
+
+    @Test fun communicationRenewalRequiresNativeApprovalAndKeepsOriginalGroup(): Unit = runBlocking {
+        val port = Port()
+        port.groups["original"] = GroupChat("original", "Original", "admin", createdAt=1, teamGroupId="team", teamVersion=1)
+        val service = TeamService(port, TeamAudit { _, _, _ -> })
+        val operation = args("""{"action":"propose","reason":"用户要求原任务续额","operation":{"op":"communication-policy","groupId":"original","expectedRevision":0,"policy":{"groupLimit":1000,"memberLimit":200,"maxHop":32}}}""")
+        val proposal = id(service.execute("owner", operation))
+        assertEquals(0, port.writes)
+        expectFailure { service.execute("owner", args("""{"action":"apply","proposalId":"$proposal"}""")) }
+        expectFailure { service.applyNative("owner", proposal, "not-approved") }
+        commit(service, "owner", proposal)
+        assertEquals(1000L, port.communication.policy.groupLimit)
+        assertEquals(32, port.communication.policy.maxHop)
+        assertEquals(setOf("original"), port.groups.keys)
+        expectFailure { service.applyNative("owner", proposal, "native-call") }
+    }
+
+    @Test fun unlimitedCommunicationRequiresExplicitPolicyAndRejectsStaleRevision(): Unit = runBlocking {
+        val port = Port()
+        port.groups["original"] = GroupChat("original", "Original", "admin", createdAt=1, teamGroupId="team", teamVersion=1)
+        val service = TeamService(port, TeamAudit { _, _, _ -> })
+        fun proposal(explicit: Boolean) = args("""{"action":"propose","reason":"用户明确不设累计上限","operation":{"op":"communication-policy","groupId":"original","expectedRevision":0,"policy":{"groupLimit":0,"memberLimit":0,"unlimitedExplicit":$explicit,"rateLimit":4,"queueLimit":2}}}""")
+        expectFailure { service.execute("owner", proposal(false)) }
+        val pending = id(service.execute("owner", proposal(true)))
+        service.prepare("owner", pending, "approval")
+        port.communication = port.communication.copy(revision=1)
+        expectFailure { service.applyNative("owner", pending, "approval") }
+        assertEquals(0, port.writes)
     }
 
     @Test fun disablingErasesNativeApprovedManagementProposals(): Unit = runBlocking {

@@ -51,6 +51,7 @@ class BotAssignmentRuntime(
     private val taskUsage: GroupTaskUsage? = null,
     private val nativeTasks: top.wkbin.taixu.core.database.task.AgentTaskRepository? = null,
     private val runtimeRepository: top.wkbin.taixu.core.database.HarnessRuntimeRepository? = null,
+    private val memberInboxSnapshot: (suspend (BotAssignment) -> IndependentMemberInboxSnapshot)? = null,
 ) {
     private val pump = AssignmentRequestPump(repository, scope, logger, ::execute)
     private val maintenanceLock = Mutex()
@@ -249,6 +250,10 @@ class BotAssignmentRuntime(
         sendIndependentMemberMessage(repository, groups, sessions, sourceSession, targetAssignmentId, text, messageId) { target, group, body, key ->
             continueTask(target, group, body, key)
         }
+    /** Read during the SAME running native task; never wait for or settle its queued turns. */
+    suspend fun readMemberInbox(sessionId: String, afterId: String? = null, limit: Int = 20): String =
+        readIndependentMemberInbox(repository, groups, sessions, sessionId, afterId, limit, memberInboxSnapshot)
+
     suspend fun memberDirectory(sessionId: String): String = independentMemberDirectory(repository, groups, sessionId)
     suspend fun history(id: String) = repository.requestsFor(id)
     suspend fun taskForSession(sessionId: String) = repository.assignmentForSession(sessionId)

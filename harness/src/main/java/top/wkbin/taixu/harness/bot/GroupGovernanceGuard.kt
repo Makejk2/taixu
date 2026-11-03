@@ -50,7 +50,7 @@ class GroupGovernanceGuard(private val groups: GroupChatRepository, private val 
             HarnessTool.PLAN, HarnessTool.SCRATCHPAD, HarnessTool.ASK_USER, HarnessTool.LOAD_RULE,
             HarnessTool.LOAD_SKILL, HarnessTool.COMPRESS)
         private val TEAM_TOOLS = setOf("list-bots", "list-assignments", "inspect-assignment", "assign-task",
-            "continue-assignment", "cancel-assignment", "report-assignment", "send-member-message", "list-member-inboxes", "list-models", "select-model",
+            "continue-assignment", "cancel-assignment", "report-assignment", "send-member-message", "list-member-inboxes", "read-member-inbox", "list-models", "select-model",
             "inspect-governance", "submit-proposal", "review-proposal")
     }
 }

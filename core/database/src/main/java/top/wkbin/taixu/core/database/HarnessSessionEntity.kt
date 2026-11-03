@@ -94,8 +94,14 @@ interface HarnessSessionDao {
     @Query("DELETE FROM bot_assignments WHERE sessionId = :id")
     suspend fun deleteBotAssignments(id: String)
 
+    @Query("UPDATE team_communication_messages SET state='cancelled', holdReason='session_deleted' " +
+        "WHERE state IN ('held','queued') AND (sourceAssignmentId IN (SELECT id FROM bot_assignments WHERE sessionId=:id) " +
+        "OR targetAssignmentId IN (SELECT id FROM bot_assignments WHERE sessionId=:id))")
+    suspend fun cancelCommunicationsForSession(id: String)
+
     @androidx.room.Transaction
     suspend fun deleteSession(id: String) {
+        cancelCommunicationsForSession(id)
         deleteBotAssignments(id)
         deleteBotGroupSession(id)
         deleteSessionRow(id)

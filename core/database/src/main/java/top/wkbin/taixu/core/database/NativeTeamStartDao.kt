@@ -12,6 +12,11 @@ interface NativeTeamStartDao {
         "(SELECT botId FROM bot_assignments WHERE independent = 1 AND sessionId = :sessionId) LIMIT 1")
     suspend fun findTeamStartSourceBot(sessionId: String): BotEntity?
 
+    @Query("SELECT (SELECT COUNT(*) FROM persona_bots WHERE sessionId=:sessionId) + " +
+        "(SELECT COUNT(*) FROM bot_group_sessions WHERE sessionId=:sessionId) + " +
+        "(SELECT COUNT(*) FROM bot_assignments WHERE sessionId=:sessionId)")
+    suspend fun nativeTeamSourceBotCount(sessionId: String): Int
+
     @Query("SELECT v.memberIdsJson FROM team_versions v JOIN group_chats g ON g.teamGroupId = v.teamId AND g.teamVersion = v.version WHERE g.id = :groupId")
     suspend fun teamStartPublishedMembers(groupId: String): String?
 
@@ -29,7 +34,7 @@ internal suspend fun BotAssignmentDao.validateNativeTeamRoot(
             // Revalidate inside the admission transaction; a string prefix never grants authority.
             val sourceId = requireNotNull(sourceSessionId) { "缺少可信来源会话" }
             val source = requireNotNull(findTeamStartSourceSession(sourceId)) { "来源会话不存在" }
-            require(findTeamStartSourceBot(sourceId) == null && assignmentForSession(sourceId) == null) { "来源不是主用户会话" }
+            require(nativeTeamSourceBotCount(sourceId) == 0 && assignmentForSession(sourceId) == null) { "来源不是主用户会话" }
             require(linkedTeamId(group) != null && (linkedVersion(group) ?: 0) > 0 && linkedDefinition(group) != null) { "群聊未绑定已发布团队" }
             require(task.reportToBotId == team.adminBotId && teamAdmin(group) == team.adminBotId) { "启动请求者必须是团队主控" }
             val publishedMembers = kotlinx.serialization.json.Json.decodeFromString<List<String>>(requireNotNull(teamStartPublishedMembers(group)))

@@ -25,6 +25,7 @@ internal fun botManagementDescriptor() = PluginDescriptor(
         PluginExtension("report-assignment", PluginExtensionPoint.TOOL),
         PluginExtension("send-member-message", PluginExtensionPoint.TOOL),
         PluginExtension("list-member-inboxes", PluginExtensionPoint.TOOL),
+        PluginExtension("read-member-inbox", PluginExtensionPoint.TOOL),
         PluginExtension("list-models", PluginExtensionPoint.TOOL),
         PluginExtension("select-model", PluginExtensionPoint.TOOL),
         PluginExtension("inspect-governance", PluginExtensionPoint.TOOL),

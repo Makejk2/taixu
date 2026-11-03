@@ -1,5 +1,11 @@
 package top.wkbin.taixu.core.database.repository
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
@@ -19,6 +25,19 @@ interface IndependentAssignmentRepository {
         request: BotAssignmentRequest,
         batch: BotWorkBatch? = null,
     )
+    /** Native identity is derived from sourceSession; callers cannot supply source member/group IDs. */
+    suspend fun sendCommunication(sourceSession: String, targetId: String, body: String, messageId: String): top.wkbin.taixu.core.model.bot.TeamCommunicationReceipt =
+        error("持久通信仓库尚未装配；未发送消息")
+    suspend fun communicationSnapshot(groupId: String): top.wkbin.taixu.core.model.bot.TeamCommunicationSnapshot =
+        error("持久通信仓库尚未装配")
+    suspend fun approveCommunicationPolicy(groupId: String, expectedRevision: Int,
+        policy: top.wkbin.taixu.core.model.bot.TeamCommunicationPolicy, sourceSession: String, approvalId: String) {
+        error("持久通信仓库尚未装配")
+    }
+    suspend fun resumeCommunications(groupId: String? = null) {}
+    /** Read-only keyset page for the currently running session's own assignment. Never claims queued work. */
+    suspend fun readCommunicationInbox(sourceSession: String, after: Long = 0, limit: Int = 50): List<top.wkbin.taixu.core.model.bot.TeamCommunicationMessage> =
+        error("持久通信仓库尚未装配")
     suspend fun enqueueRequest(request: BotAssignmentRequest)
     /** Atomic get-or-create; never creates a session/request for a duplicate work item.
      * trustedNativeTeamStart is exclusively for the internally approved native TeamFactory path,
@@ -48,6 +67,26 @@ interface IndependentAssignmentRepository {
 }
 
 internal class RoomIndependentAssignmentRepository(private val dao: BotAssignmentDao, private val json: Json) : IndependentAssignmentRepository {
+    override suspend fun sendCommunication(sourceSession: String, targetId: String, body: String, messageId: String) =
+        dao.sendCommunication(sourceSession, targetId, body, messageId, System.currentTimeMillis())
+    override suspend fun communicationSnapshot(groupId: String) = dao.communicationSnapshot(groupId)
+    override suspend fun approveCommunicationPolicy(groupId: String, expectedRevision: Int,
+        policy: top.wkbin.taixu.core.model.bot.TeamCommunicationPolicy, sourceSession: String, approvalId: String) {
+        dao.approveCommunicationPolicy(groupId, expectedRevision, policy, sourceSession, approvalId, System.currentTimeMillis())
+        resumeCommunications(groupId)
+    }
+    override suspend fun resumeCommunications(groupId: String?) {
+        (groupId?.let { listOf(it) } ?: dao.heldCommunicationGroups()).forEach { group ->
+            var cursor = 0L
+            while (true) {
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                cursor = dao.resumeCommunicationPage(group, cursor, System.currentTimeMillis()) ?: break
+            }
+        }
+    }
+    override suspend fun readCommunicationInbox(sourceSession: String, after: Long, limit: Int) =
+        dao.readCommunicationInbox(sourceSession, after, limit)
+
     override suspend fun createIndependent(
         task: BotAssignment,
         session: HarnessSessionEntity,
@@ -59,7 +98,17 @@ internal class RoomIndependentAssignmentRepository(private val dao: BotAssignmen
         dao.createIndependent(task.toEntity(json), session, request.toEntity(), batch?.toEntity(), operationId, nativeTaskId, trustedNativeTeamStart, sourceSessionId)
     override suspend fun dispatchedBots(groupId: String, operationId: String, nativeTaskId: String?) = dao.dispatchedBots(groupId, operationId, nativeTaskId).toSet()
     override suspend fun enqueueRequest(request: BotAssignmentRequest) = dao.enqueueRequest(request.toEntity())
-    override fun pendingRequests() = dao.pendingAssignmentRequests().map { rows -> rows.map { it.model() } }
+    override fun pendingRequests(): Flow<List<BotAssignmentRequest>> = channelFlow {
+        launch {
+            while (true) {
+                try { resumeCommunications() }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { /* Durable holds survive transient failures; never discard them. */ }
+                delay(1_000)
+            }
+        }
+        dao.pendingAssignmentRequests().collect { rows -> send(rows.map { it.model() }) }
+    }
     override fun observeRequest(id: String) = dao.observeAssignmentRequest(id).map { it?.model() }
     override suspend fun getRequest(id: String) = dao.findAssignmentRequest(id)?.model()
     override suspend fun requestsFor(id: String) = dao.assignmentRequests(id).map { it.model() }

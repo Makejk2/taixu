@@ -66,6 +66,17 @@ jobs:
       - name: Grant Execute Permission for Gradlew
         run: chmod +x gradlew
 
+      - name: Generate Room schemas before migration test assets
+        env:
+          TAIXU_DEV_BUILD: "1"
+        run: ./gradlew :core:database:kspDebugKotlin --no-daemon --stacktrace
+
+      - name: Communication and migration focused regressions
+        env:
+          TAIXU_DEV_BUILD: "1"
+        run: |
+          ./gradlew :core:database:testDebugUnitTest --tests '*TeamCommunication*' :harness:testDebugUnitTest --tests '*IndependentMemberInboxTest' --tests '*BotAssignmentRuntimeTest' --tests '*TeamCommunicationBudgetTest' --tests '*TeamServiceTest' --no-daemon --stacktrace --continue
+
       - name: Run Debug Unit Tests
         env:
           TAIXU_DEV_BUILD: "1"
@@ -79,6 +90,7 @@ jobs:
           path: |
             **/build/reports/tests/
             **/build/test-results/
+            core/database/schemas/
           if-no-files-found: warn
           retention-days: 7
 

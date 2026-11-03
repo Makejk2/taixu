@@ -7,6 +7,8 @@ import top.wkbin.taixu.core.database.task.AgentTaskDao
 
 @Database(
     entities = [
+        TeamCommunicationPolicyEntity::class,
+        TeamCommunicationEntity::class,
         ToolEntity::class,
         InstallLogEntity::class,
         InstallTaskEntity::class,
@@ -71,7 +73,7 @@ import top.wkbin.taixu.core.database.task.AgentTaskDao
         BtwQueryEntity::class,
         AgentMessageFeedbackEntity::class,
     ],
-    version = 85,
+    version = 86,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {

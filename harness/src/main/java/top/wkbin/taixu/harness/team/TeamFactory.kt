@@ -110,6 +110,9 @@ fun createTeamBackend(
             dispatcher().cancelGroup(groupId)
         }
     }
+    override suspend fun communicationSnapshot(groupId: String) = assignments.communicationSnapshot(groupId)
+    override suspend fun communicationPolicy(groupId: String, expectedRevision: Int, policy: TeamCommunicationPolicy,
+        sourceSession: String, approvalId: String) = assignments.approveCommunicationPolicy(groupId, expectedRevision, policy, sourceSession, approvalId)
     override suspend fun status(groupId: String): String {
         val group = requireNotNull(groups.getGroup(groupId)) { "群聊不存在" }
         val tasks = assignments.observeForGroup(groupId).first()
@@ -119,6 +122,7 @@ fun createTeamBackend(
         val messages = groups.observeMessages(groupId).first()
         return buildJsonObject {
             put("group", Json.encodeToJsonElement(group))
+            put("communication", Json.encodeToJsonElement(assignments.communicationSnapshot(groupId)))
             put("tasks", buildJsonArray { tasks.forEach { task -> add(buildJsonObject {
                 put("id", task.id); put("memberId", task.botId); put("status", task.status.name)
                 put("sessionId", task.sessionId); put("independent", task.independent)
