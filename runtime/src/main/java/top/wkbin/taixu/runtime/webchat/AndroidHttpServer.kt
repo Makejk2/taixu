@@ -43,6 +43,9 @@ internal class AndroidHttpServer private constructor(
     @Volatile
     private var running = false
 
+    /** accept 线程引用；[stop] 需要 join 它，确保返回时端口已真正释放。 */
+    private var acceptThread: Thread? = null
+
     private var externalExecutor: Executor? = null
     private var ownedExecutor: ExecutorService? = null
 
@@ -72,22 +75,38 @@ internal class AndroidHttpServer private constructor(
         }
         serverSocket = socket
         running = true
-        Thread({ acceptConnections(socket) }, "taixu-webchat-accept").apply {
+        val thread = Thread({ acceptConnections(socket) }, "taixu-webchat-accept").apply {
             isDaemon = true
             start()
         }
+        acceptThread = thread
     }
 
-    @Synchronized
     fun stop(delaySeconds: Int) {
-        running = false
-        runCatching { serverSocket?.close() }
-        serverSocket = null
-        // 已 accept 的连接不会随监听 socket 一起关闭：SSE 流可以挂住工作线程与 fd。
-        activeSockets.forEach { runCatching { it.close() } }
-        activeSockets.clear()
-        ownedExecutor?.shutdownNow()
-        ownedExecutor = null
+        var thread: Thread? = null
+        synchronized(this) {
+            running = false
+            runCatching { serverSocket?.close() }
+            serverSocket = null
+            thread = acceptThread
+            acceptThread = null
+            // 已 accept 的连接不会随监听 socket 一起关闭：SSE 流可以挂住工作线程与 fd。
+            activeSockets.forEach { runCatching { it.close() } }
+            activeSockets.clear()
+            ownedExecutor?.shutdownNow()
+            ownedExecutor = null
+        }
+        // join 必须在监视器之外：accept 线程可能正卡在 currentExecutor() 的 synchronized 上，
+        // 持锁等待会互锁。返回前必须等它退出，否则调用方立刻重绑同一端口仍会撞
+        // ESTABLISHED 残留连接（SO_REUSEADDR 无法绕过）而抛 BindException。
+        if (thread != null && thread !== Thread.currentThread()) {
+            runCatching { thread.join(ACCEPT_JOIN_TIMEOUT_MS) }
+        }
+        // 二次清扫：accept 线程可能在首轮 forEach 之后才登记连接，这里兜住。
+        synchronized(this) {
+            activeSockets.forEach { runCatching { it.close() } }
+            activeSockets.clear()
+        }
         if (delaySeconds > 0) {
             // The WebChat caller always requests an immediate stop. The argument
             // is kept to mirror the old API and make that intent explicit.
@@ -117,11 +136,14 @@ internal class AndroidHttpServer private constructor(
         while (running) {
             try {
                 val client = socket.accept()
+                // 先登记再检查：若 stop() 恰好在这两步之间跑完清扫，登记后的连接
+                // 仍会被下面的 !running 分支关闭，不会泄漏成占端口的 ESTABLISHED。
+                activeSockets.add(client)
                 if (!running) {
+                    activeSockets.remove(client)
                     runCatching { client.close() }
                     break
                 }
-                activeSockets.add(client)
                 try {
                     currentExecutor().execute { handleClient(client) }
                 } catch (_: RejectedExecutionException) {
@@ -254,6 +276,8 @@ internal class AndroidHttpServer private constructor(
         private const val INITIAL_LINE_BYTES = 128
         private const val MAX_WORKER_THREADS = 8
         private const val WORKER_KEEP_ALIVE_SECONDS = 30L
+        /** [stop] 等待 accept 线程退出的上限；超时只记录残留，绝不无限阻塞调用方。 */
+        private const val ACCEPT_JOIN_TIMEOUT_MS = 2_000L
 
         fun create(address: InetSocketAddress, backlog: Int): AndroidHttpServer =
             AndroidHttpServer(address, backlog)
