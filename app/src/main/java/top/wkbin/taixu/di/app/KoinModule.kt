@@ -144,6 +144,7 @@ val appModule = module {
     single<Json> { provideJson() }
 
     single<AppDatabase> { provideDatabase(context = get()) }
+    single<top.wkbin.taixu.core.database.TeamSuggestionRepository> { top.wkbin.taixu.core.database.RoomTeamSuggestionRepository(get<AppDatabase>().teamSuggestionDao()) }
 
     single<ToolDao> { provideToolDao(database = get()) }
 

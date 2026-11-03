@@ -193,7 +193,6 @@ internal val toolBackendModule = module {
         )
     }
     single { top.wkbin.taixu.harness.config.createAppConfigBackend(top.wkbin.taixu.core.datastore.AgentConfigPreferences(get()), get()) }
-    single<top.wkbin.taixu.core.database.TeamSuggestionRepository> { top.wkbin.taixu.core.database.RoomTeamSuggestionRepository(get<top.wkbin.taixu.core.database.AppDatabase>().teamSuggestionDao()) }
     single { top.wkbin.taixu.harness.team.createTeamBackend(get(), get(), get(), get(), { get() }, { get() }, { get() }, get(), sessions = get(),
         suggestions = get(), managementEnabled = { top.wkbin.taixu.core.datastore.AiAdminPreferences(get()).enabled.first() }) }
     single { top.wkbin.taixu.harness.admin.createBoundAppAdminBackend(

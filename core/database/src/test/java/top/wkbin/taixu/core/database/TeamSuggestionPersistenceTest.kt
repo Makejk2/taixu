@@ -141,12 +141,12 @@ class TeamSuggestionPersistenceTest {
         }
     }
     @Test fun legacyFrozenFactsRejectChangesAndRollbackWithoutOwners(): Unit = runBlocking {
-        legacySeed()
         val sql = db.openHelper.writableDatabase
         val changes = listOf(
             "UPDATE bot_assignments SET status='COMPLETED' WHERE id='task'",
             "UPDATE bot_assignments SET revision=revision+1 WHERE id='task'",
             "UPDATE bot_assignments SET sessionId='member2' WHERE id='task'",
+            "UPDATE bot_assignments SET rootWorkId='changed-root' WHERE id='task'",
             "UPDATE harness_sessions SET workspace='/changed' WHERE id='member'",
             "UPDATE harness_sessions SET approvalMode='assisted' WHERE id='owner'",
             "UPDATE team_versions SET definitionJson='changed' WHERE teamId='team'",
@@ -154,11 +154,24 @@ class TeamSuggestionPersistenceTest {
             "UPDATE group_chats SET name='changed' WHERE id='g'",
         )
         changes.forEach { change ->
+            // Each mutation starts from the same facts: moving task to member2 must not
+            // remove member from the snapshot tested by the next workspace mutation.
+            db.clearAllTables()
+            legacySeed()
             val snapshot = repo.legacyOwnershipSnapshot("owner", "g")
             sql.execSQL(change)
+            assertNotEquals("Mutation must change frozen facts: $change", snapshot,
+                repo.legacyOwnershipSnapshot("owner", "g"))
+            val tasks = dao.legacyTasks("g")
             denied { repo.reauthorizeLegacyGroup("owner", "g", snapshot, "p") }
             assertNull(dao.teamGroupOwner("g"))
             assertNull(dao.teamRootOwner("root"))
+            assertNull(dao.teamRootOwner("changed-root"))
+            assertEquals(tasks, dao.legacyTasks("g"))
+            sql.query("SELECT COUNT(*) FROM agent_approval_audits WHERE kind='team_legacy_reauthorized'").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+            }
         }
     }
     @Test fun legacyRootCrossGroupAndAlreadyOwnedGroupsCannotBeSeized(): Unit = runBlocking {
@@ -168,8 +181,12 @@ class TeamSuggestionPersistenceTest {
         denied { repo.legacyOwnershipSnapshot("owner", "g") }
         assertNull(dao.teamGroupOwner("g"))
         db.openHelper.writableDatabase.execSQL("UPDATE bot_assignments SET groupId='g' WHERE id='task2'")
+        // A root owner references team_group_owners, not merely group_chats.
+        dao.insertTeamGroupOwner(TeamGroupOwnerEntity("other", "stranger"))
         dao.insertTeamRootOwner(TeamRootOwnerEntity("root", "other", "stranger"))
         denied { repo.legacyOwnershipSnapshot("owner", "g") }
+        assertNull(dao.teamGroupOwner("g"))
+        assertEquals(TeamRootOwnerEntity("root", "other", "stranger"), dao.teamRootOwner("root"))
         db.openHelper.writableDatabase.execSQL("DELETE FROM team_root_owners")
         dao.insertTeamGroupOwner(TeamGroupOwnerEntity("g", "stranger"))
         denied { repo.legacyOwnershipSnapshot("owner", "g") }
