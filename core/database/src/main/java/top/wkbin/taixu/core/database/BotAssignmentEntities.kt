@@ -209,7 +209,8 @@ interface BotAssignmentDao : TeamCommunicationDao, NativeTeamStartDao, GroupDeli
     @Query("SELECT * FROM bot_assignments WHERE id = :id LIMIT 1")
     suspend fun findById(id: String): BotAssignmentEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // REPLACE deletes the parent row and cascades its request history; updates must preserve it.
+    @androidx.room.Upsert
     suspend fun upsert(assignment: BotAssignmentEntity)
 
     @Query(

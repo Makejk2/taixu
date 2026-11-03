@@ -202,6 +202,17 @@ class TeamCommunicationPersistenceTest {
         assertEquals("cancelled", tasks.getRequest(mail.id)!!.status)
     }
 
+    @Test(timeout = 20_000) fun savingExistingAssignmentPreservesRequestsAndCommunicationAncestry(): Unit = runBlocking {
+        seed(TeamCommunicationPolicy(groupLimit=20,memberLimit=20,maxHop=1,rateLimit=100,queueLimit=100))
+        dao.insertAssignmentRequest(BotAssignmentRequestEntity("peer:parent", "a", """{"hop":1}""", 1))
+        tasks.save(tasks.get("a")!!.copy(activeRequestId="peer:parent", title="updated task"))
+        assertNotNull(tasks.getRequest("peer:parent"))
+        assertEquals("updated task", tasks.get("a")!!.title)
+        assertEquals("hop_budget", tasks.sendCommunication("session-a", "b", "hold after update", "1").holdReason)
+        tasks.save(tasks.get("a")!!.copy(title="updated again"))
+        assertNotNull(tasks.getRequest("peer:parent"))
+    }
+
     private suspend fun assertFailure(block: suspend () -> Unit) {
         try { block(); fail("expected rejection") } catch (_: IllegalArgumentException) { } catch (_: IllegalStateException) { }
     }
