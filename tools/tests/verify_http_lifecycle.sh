@@ -64,7 +64,7 @@ CCP="$COMPILER:$STDLIB:$SCRIPT:$DAEMON:$REFLECT:$TROVE:$COROUTINES:$ANNOTATIONS"
  sha256sum "$SOURCE" "$TEST" "$LIFECYCLE" "$HELPERS" "$0"
  printf 'CACHE_CLASSPATH=%s\n' "$CCP:$JUNIT:$HAMCREST"
 } > "$OUT/environment.log" 2>&1
-"$JAVA" -cp "$CCP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -no-reflect -jvm-target 17 -classpath "$CP" -d "$OUT/classes" "$SOURCE" "$TEST" "$LIFECYCLE" "$OUT/FileResponseExtract.kt" "$OUT/LifecycleProbe.kt" > "$OUT/compile.log" 2>&1 || { cat "$OUT/compile.log"; exit 2; }
+"$JAVA" -cp "$CCP" org.jetbrains.kotlin.cli.jvm.K2JVMCompiler -no-stdlib -no-reflect -jvm-target 17 -classpath "$CP" -d "$OUT/classes" "$SOURCE" "$(dirname "$SOURCE")/HttpAcceptBarrier.kt" "$TEST" "$LIFECYCLE" "$OUT/FileResponseExtract.kt" "$OUT/LifecycleProbe.kt" > "$OUT/compile.log" 2>&1 || { cat "$OUT/compile.log"; exit 2; }
 RUNCP="$OUT/classes:$CP"
 status=0
 "$JAVA" -cp "$RUNCP" top.wkbin.taixu.runtime.webchat.LifecycleProbeKt "${JUNIT_ROUNDS:-3}" > "$OUT/junit.log" 2>&1 || status=$?

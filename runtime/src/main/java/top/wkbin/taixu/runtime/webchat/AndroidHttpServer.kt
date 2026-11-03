@@ -38,6 +38,7 @@ internal class AndroidHttpServer private constructor(
 
     /** Each generation owns its listener, connections and default executor. */
     private class State {
+        val acceptBarrier = HttpAcceptBarrier()
         var listener: ServerSocket? = null
         val sockets = ConcurrentHashMap.newKeySet<Socket>()
         var ownedExecutor: ExecutorService? = null
@@ -91,6 +92,7 @@ internal class AndroidHttpServer private constructor(
         val retired = synchronized(this) {
             val generation = state ?: return
             generation.stopping = true
+            generation.acceptBarrier.retire()
             state = null
             // Close before a new start may bind, but never join or run handlers here.
             runCatching { generation.listener?.close() }
@@ -100,6 +102,8 @@ internal class AndroidHttpServer private constructor(
         retired.sockets.forEach { runCatching { it.close() } }
         retired.sockets.clear()
         retired.ownedExecutor?.shutdownNow()
+        // Await only native accept return, outside server monitor and outside handler execution.
+        retired.acceptBarrier.awaitReleased()
     }
 
     /** Called only while holding this server's monitor, never by a stale accept. */
@@ -123,7 +127,7 @@ internal class AndroidHttpServer private constructor(
     private fun acceptConnections(generation: State, listener: ServerSocket) {
         while (!generation.stopping && !listener.isClosed) {
             try {
-                val client = listener.accept()
+                val client = generation.acceptBarrier.accept { listener.accept() } ?: break
                 val target = synchronized(this) {
                     if (state !== generation || generation.stopping || listener.isClosed) null
                     else {

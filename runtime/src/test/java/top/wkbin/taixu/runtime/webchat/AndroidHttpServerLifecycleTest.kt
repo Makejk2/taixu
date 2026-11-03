@@ -180,6 +180,75 @@ class AndroidHttpServerLifecycleTest {
         } finally { server.stop(0) }
     }
 
+    @Test
+    fun `stop waits for native accept only without holding server monitor`() {
+        val server = newServer()
+        server.start()
+        val gate = field(state(server), "acceptBarrier") as HttpAcceptBarrier
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val stopped = CountDownLatch(1)
+        val errors = AtomicReference<Throwable?>()
+        val accepting = Thread {
+            try { gate.accept { entered.countDown(); check(release.await(5, TimeUnit.SECONDS)) } }
+            catch (failure: Throwable) { errors.set(failure) }
+        }.apply { isDaemon = true; start() }
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        val stopper = Thread {
+            try { server.stop(0) } catch (failure: Throwable) { errors.set(failure) }
+            finally { stopped.countDown() }
+        }.apply { isDaemon = true; start() }
+        try {
+            awaitCondition("native release is awaited") { stopper.state == Thread.State.TIMED_WAITING }
+            synchronized(server) { assertEquals(1L, stopped.count) }
+            release.countDown(); join(accepting); join(stopper)
+            errors.get()?.let { throw AssertionError("release barrier failed", it) }
+            assertNull(gate.accept { error("Retired generation must not accept") })
+            server.start(); server.stop(0)
+        } finally { release.countDown(); join(accepting); join(stopper); server.stop(0) }
+    }
+
+    @Test
+    fun `native release timeout is explicit and interruption preserved`() {
+        val gate = HttpAcceptBarrier()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val accepting = Thread { gate.accept { entered.countDown(); release.await() } }.apply { start() }
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        try {
+            gate.retire()
+            try { gate.awaitReleased(1); fail("Must not report success before release") }
+            catch (expected: IllegalStateException) { assertTrue(expected.message!!.contains("did not release")) }
+            Thread.currentThread().interrupt()
+            try { gate.awaitReleased(); fail("Must surface interruption") }
+            catch (expected: IllegalStateException) {
+                assertTrue(expected.cause is InterruptedException)
+                assertTrue(Thread.currentThread().isInterrupted)
+            } finally { Thread.interrupted() }
+        } finally { release.countDown(); join(accepting) }
+        gate.awaitReleased()
+    }
+
+    @Test
+    fun `direct executor handler stops itself without self wait`() {
+        val server = newServer()
+        val completed = CountDownLatch(1)
+        val errors = AtomicReference<Throwable?>()
+        server.executor = Executor { it.run() }
+        server.createContext("/") { exchange ->
+            try { server.stop(0); exchange.close() }
+            catch (failure: Throwable) { errors.set(failure) }
+            finally { completed.countDown() }
+        }
+        try {
+            server.start()
+            request(server, readHeaders = false).use {
+                assertTrue(completed.await(5, TimeUnit.SECONDS))
+                errors.get()?.let { failure -> throw AssertionError("self-stop failed", failure) }
+            }
+        } finally { server.stop(0) }
+    }
+
     private fun newServer() = AndroidHttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
     private fun state(server: AndroidHttpServer): Any = field(server, "state")!!
     private fun listener(state: Any) = field(state, "listener") as ServerSocket

@@ -18,3 +18,9 @@ HTTP原版本身的全局生命周期仍存在可独立改进之处，但这不�
 完整CI新增--continue仅为收集其他模块的回归，不忽略失败退出码，不删除、跳过或重试单测。
 
 团队同一次启动的rootWorkId已统一，成员stageId/workItemId仍区分；审批快照被观测到变化即永久消费提案，恢复旧值不能复用旧批准。
+
+## 6860a5bb内核现场及本代accept屏障
+
+该轮3836项只有HTTP重启一项BindException，失败当场tcp6存在目标端口LISTEN(state0A)，并非仅TIME_WAIT。因此不再依据无join猜因，也不恢复旧全局二次清扫。新增HttpAcceptBarrier只记录本代原生accept调用的进入/返回；stop在本代listener.close及本代连接清理后，锁外等待原生accept返回，不等待handler/executor线程；超时明确失败，中断恢复flag并报错。retire阻止旧代再次进入accept。
+
+新增3项测试覆盖stop不占服务锁、有限等待显式失败与中断、自direct handler停止不selfjoin。本地Java17真实Socket协议5项+生命周期8项，重复5轮65项通过；Java25云端BindException是否解除仍须本轮CI验证，不以本地全绿冒充最终结论。
