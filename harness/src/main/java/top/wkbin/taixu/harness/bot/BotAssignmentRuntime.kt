@@ -79,10 +79,37 @@ class BotAssignmentRuntime(
         return modelManager?.withBotLock(botId, create) ?: create()
     }
 
+    /**
+     * Trusted native boundary: only the TeamFactory path AFTER a real native approval may call this.
+     * Never expose this method or its trust flag as a model/plugin parameter. A key is deduplication,
+     * not proof of approval; the caller supplies the verified user session and stable operation key.
+     */
+    internal suspend fun createApprovedTeamRoot(
+        sourceSessionId: String,
+        botId: String,
+        groupId: String,
+        instruction: String,
+        writePaths: List<String>,
+        stableOperationKey: String,
+    ): BotAssignment {
+        require(stableOperationKey.isNotBlank()) { "缺少原生批准操作标识" }
+        val source = requireNotNull(sessions.findById(sourceSessionId)) { "来源会话不存在" }
+        require(bots.getBotBySessionId(source.id) == null && repository.assignmentForSession(source.id) == null) {
+            "原生团队启动仅允许主用户会话，不能从成员或任务会话启动"
+        }
+        val group = requireNotNull(groups.getGroup(groupId)) { "群聊不存在" }
+        require(group.teamGroupId != null && (group.teamVersion ?: 0) > 0) { "团队启动须绑定已发布版本" }
+        val create = suspend {
+            createTask(botId, groupId, group.adminBotId, sourceSessionId, instruction, writePaths,
+                emptyList(), null, null, null, stableOperationKey, trustedNativeTeamStart = true)
+        }
+        return modelManager?.withBotLock(botId, create) ?: create()
+    }
+
     suspend fun batchSize(batchId: String): Int = repository.batchTaskCount(batchId)
 
     private suspend fun createTask(botId: String, groupId: String, requesterId: String, sourceSessionId: String, instruction: String,
-        writePaths: List<String>, dependsOn: List<String>, workId: String?, proposalId: String?, workItemId: String?, operationId: String?): BotAssignment {
+        writePaths: List<String>, dependsOn: List<String>, workId: String?, proposalId: String?, workItemId: String?, operationId: String?, trustedNativeTeamStart: Boolean = false): BotAssignment {
         start()
         require(instruction.isNotBlank()) { "任务内容不能为空" }
         val bot = requireNotNull(bots.getBot(botId)) { "执行成员不存在" }
@@ -93,7 +120,19 @@ class BotAssignmentRuntime(
         require(writePaths.all { HarnessPathResolver().isWithinWorkspace(it, workspace) }) {
             "写入路径必须在来源工作区 $workspace 内；请使用工作区相对路径或该工作区的绝对路径，不能使用 /root"
         }
-        require(groups.getTeam(groupId).canAssign(requesterId, botId) || groups.getGovernance(groupId).canRoute(requesterId, botId)) { "只能向本群直属下级派发新任务" }
+        if (!trustedNativeTeamStart) {
+            require(groups.getTeam(groupId).canAssign(requesterId, botId) || groups.getGovernance(groupId).canRoute(requesterId, botId)) { "只能向本群直属下级派发新任务" }
+        } else {
+            require(bots.getBotBySessionId(sourceSessionId) == null && repository.assignmentForSession(sourceSessionId) == null) {
+                "原生团队启动来源必须是主用户会话"
+            }
+            val team = groups.getTeam(groupId)
+            val policy = groups.getGovernance(groupId)
+            policy.validate(team)
+            require(requesterId == team.adminBotId && policy.executionRules(team, botId).isEmpty()) {
+                "团队启动批准不能替代执行成员的方案审议"
+            }
+        }
         val parent = repository.assignmentForSession(sourceSessionId)
         if (parent != null) {
             require(parent.groupId == groupId && parent.botId == requesterId) { "不能跨群委派原任务" }
@@ -126,7 +165,11 @@ class BotAssignmentRuntime(
                 updatedAt = now,
             )
         }
-        val root = proposal?.rootWorkId ?: parent?.rootWorkId ?: rootWorkId(sourceSessionId, operationId, groupId)
+        val root = if (trustedNativeTeamStart) {
+            // Length-independent, unambiguous identity; unique work-item admission is transactional.
+            UUID.nameUUIDFromBytes(listOf(sourceSessionId, groupId, requireNotNull(operationId))
+                .joinToString("") { "${it.length}:$it" }.toByteArray(Charsets.UTF_8)).toString()
+        } else proposal?.rootWorkId ?: parent?.rootWorkId ?: rootWorkId(sourceSessionId, operationId, groupId)
         val stage = when {
             (proposal != null && parent != null && parent.botId == proposal.rule.executorId) ||
                 parent?.stageId?.startsWith("delivery:") == true -> "delivery:${parent?.id}"
@@ -152,7 +195,7 @@ class BotAssignmentRuntime(
         )
         val nativeSource = nativeTasks?.listForSession(sourceSessionId, top.wkbin.taixu.core.database.task.AgentTaskStatus.ACTIVE)
             ?.singleOrNull { it.operationId == operationId && it.groupId == groupId }
-        val admitted = repository.createIndependentOnce(task, session, BotAssignmentRequest("initial:$id", id, instruction, now), batch, operationId, nativeSource?.id)
+        val admitted = repository.createIndependentOnce(task, session, BotAssignmentRequest("initial:$id", id, instruction, now), batch, operationId, nativeSource?.id, trustedNativeTeamStart, sourceSessionId)
         return requireNotNull(repository.get(admitted)) { "派发回执不存在" }
     }
 

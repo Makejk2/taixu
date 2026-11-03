@@ -50,6 +50,111 @@ class BotAssignmentRuntimeTest {
         sessions.upsert(HarnessSessionEntity("parent", "Group", 1, 1, null, workspace = "/workspace/project", executionTargetJson = "frozen-target"))
     }
 
+    private suspend fun seedPublishedTeam(policy: GroupGovernance = GroupGovernance()) {
+        seed()
+        db.personaBotDao().upsert(db.personaBotDao().findById("member")!!.copy(
+            id = "second", name = "Second", sessionId = "second-dm", modelId = "second-model"))
+        val definition = BotTeamDefinition("chief", mapOf("second" to "member"), policy)
+        db.botMemberGroupDao().installIndependentDefinition(
+            BotMemberGroupEntity("published", "Published", 1, Json.encodeToString(definition)),
+            listOf("chief", "member", "second").mapIndexed { index, id ->
+                BotMemberGroupMemberEntity("published", id, index, 1)
+            },
+        )
+        groups.attachTeam("group", "published")
+    }
+
+    private suspend fun rejected(block: suspend () -> Unit) {
+        try { block(); fail("Expected admission rejection") } catch (_: IllegalArgumentException) { }
+    }
+
+    @Test fun `approved native start gives admin and two members distinct idempotent roots with inherited authority`() = runBlocking {
+        seedPublishedTeam()
+        val source = sessions.findById("parent")!!.copy(approvalMode = "assisted", runMode = "plan", projectType = "android")
+        sessions.upsert(source)
+        val engine = runtime { _, _, _ -> awaitCancellation() }
+        val roots = listOf("chief", "member", "second").map { bot ->
+            engine.createApprovedTeamRoot("parent", bot, "group", "work $bot", listOf("src/$bot"), "approved-operation")
+        }
+        assertEquals(3, roots.map { it.id }.distinct().size)
+        assertEquals(3, roots.map { it.sessionId }.distinct().size)
+        assertEquals(1, roots.map { it.rootWorkId }.distinct().size)
+        roots.forEach { task ->
+            assertNull(task.parentAssignmentId)
+            assertNull(task.batchId)
+            val session = sessions.findById(task.sessionId!!)!!
+            assertEquals(source.workspace, session.workspace)
+            assertEquals(source.projectType, session.projectType)
+            assertEquals(source.approvalMode, session.approvalMode)
+            assertEquals(source.runMode, session.runMode)
+            assertEquals(source.executionTargetJson, session.executionTargetJson)
+            assertEquals(bots.getBot(task.botId)!!.modelId, session.modelId)
+            assertEquals(listOf("src/${task.botId}"), task.writePaths)
+            val again = engine.createApprovedTeamRoot("parent", task.botId, "group", "retry", listOf("src/${task.botId}"), "approved-operation")
+            assertEquals(task.id, again.id)
+            assertEquals(task.sessionId, again.sessionId)
+            assertEquals(1, engine.history(task.id).size)
+        }
+        rejected { engine.create("chief", "group", "chief", "parent", "ordinary self") }
+        rejected { engine.create("second", "group", "chief", "parent", "ordinary non-direct") }
+    }
+
+    @Test fun `approved roots reject nonexistent bot and assignment sources and workspace escape`() = runBlocking {
+        seedPublishedTeam()
+        val engine = runtime { _, _, _ -> awaitCancellation() }
+        rejected { engine.createApprovedTeamRoot("missing", "chief", "group", "fake", emptyList(), "op") }
+        sessions.upsert(HarnessSessionEntity("member-dm", "Member", 1, 1, null))
+        rejected { engine.createApprovedTeamRoot("member-dm", "chief", "group", "fake", emptyList(), "op") }
+        rejected { engine.createApprovedTeamRoot("parent", "chief", "group", "escape", listOf("../outside"), "op") }
+        val root = engine.createApprovedTeamRoot("parent", "member", "group", "valid", emptyList(), "op")
+        rejected { engine.createApprovedTeamRoot(root.sessionId!!, "chief", "group", "nested", emptyList(), "nested") }
+        assertTrue(tasks.assignmentsForBot("chief").isEmpty())
+    }
+
+    @Test fun `DAO transaction independently enforces native root trust and inheritance`() = runBlocking {
+        seedPublishedTeam()
+        val engine = runtime { _, _, _ -> awaitCancellation() }
+        val root = engine.createApprovedTeamRoot("parent", "chief", "group", "valid", emptyList(), "approved")
+        val entity = db.botAssignmentDao().findById(root.id)!!
+        val session = sessions.findById(root.sessionId!!)!!
+        suspend fun direct(source: String?, trusted: Boolean = true, candidate: BotAssignmentEntity = entity,
+            childSession: HarnessSessionEntity = session) {
+            db.botAssignmentDao().createIndependent(candidate, childSession,
+                BotAssignmentRequestEntity("direct", candidate.id, "fake", 1),
+                dispatchOperationId = "approved", trustedNativeTeamStart = trusted, sourceSessionId = source)
+        }
+        rejected { direct("missing") }
+        sessions.upsert(HarnessSessionEntity("member-dm", "Member", 1, 1, null))
+        rejected { direct("member-dm") }
+        rejected { direct(root.sessionId) }
+        rejected { direct("parent", trusted = false) }
+        rejected { direct("parent", candidate = entity.copy(parentAssignmentId = root.id)) }
+        rejected { direct("parent", candidate = entity.copy(reportToBotId = "member")) }
+        rejected { direct("parent", childSession = session.copy(workspace = "/other")) }
+        rejected { direct("parent", childSession = session.copy(executionTargetJson = "other-target")) }
+        rejected { direct("parent", childSession = session.copy(approvalMode = "different")) }
+        rejected { direct("parent", childSession = session.copy(modelId = "different")) }
+        rejected { direct("parent", candidate = entity.copy(writePathsJson = "[\"../escape\"]")) }
+        rejected { direct("parent", candidate = entity.copy(rootWorkId = "fake")) }
+        assertEquals(1, engine.history(root.id).size)
+    }
+
+    @Test fun `native approval never bypasses governed executors or unlinked rooms`() = runBlocking {
+        seedPublishedTeam(GroupGovernance(listOf(GroupReviewRule("rule", "Review", "chief", "member", "second"))))
+        val engine = runtime { _, _, _ -> awaitCancellation() }
+        rejected { engine.createApprovedTeamRoot("parent", "second", "group", "bypass", emptyList(), "op") }
+        val root = engine.createApprovedTeamRoot("parent", "chief", "group", "author", emptyList(), "op")
+        val entity = db.botAssignmentDao().findById(root.id)!!
+        rejected {
+            db.botAssignmentDao().createIndependent(entity.copy(botId = "second", stageId = "delegate:root:second", workItemId = "second"),
+                sessions.findById(root.sessionId!!)!!, BotAssignmentRequestEntity("blocked", root.id, "bypass", 1),
+                dispatchOperationId = "op", trustedNativeTeamStart = true, sourceSessionId = "parent")
+        }
+        db.groupChatDao().upsertGroup(GroupChatEntity("unlinked", "Old", "chief", "", 1))
+        groups.addMember("unlinked", "chief", 0)
+        rejected { engine.createApprovedTeamRoot("parent", "chief", "unlinked", "old", emptyList(), "op") }
+    }
+
     private fun runtime(execute: BotAssignmentExecutor) = BotAssignmentRuntime(tasks, groups, bots, sessions, control, tracker, execute, log, scope)
     private suspend fun awaitStatus(id: String, expected: BotAssignmentStatus) = withTimeout(10_000) {
         while (tasks.get(id)?.status != expected) delay(10)

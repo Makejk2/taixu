@@ -20,9 +20,14 @@ interface IndependentAssignmentRepository {
         batch: BotWorkBatch? = null,
     )
     suspend fun enqueueRequest(request: BotAssignmentRequest)
-    /** Atomic get-or-create; never creates a session/request for a duplicate work item. */
+    /** Atomic get-or-create; never creates a session/request for a duplicate work item.
+     * trustedNativeTeamStart is exclusively for the internally approved native TeamFactory path,
+     * NEVER for model-supplied arguments. sourceSessionId is the verified main user session.
+     */
     suspend fun createIndependentOnce(task: BotAssignment, session: HarnessSessionEntity,
-        request: BotAssignmentRequest, batch: BotWorkBatch? = null, operationId: String? = null, nativeTaskId: String? = null): String {
+        request: BotAssignmentRequest, batch: BotWorkBatch? = null, operationId: String? = null, nativeTaskId: String? = null,
+        trustedNativeTeamStart: Boolean = false, sourceSessionId: String? = null): String {
+        require(!trustedNativeTeamStart) { "此存储实现不支持可信原生团队启动" }
         createIndependent(task, session, request, batch)
         return task.id
     }
@@ -50,8 +55,8 @@ internal class RoomIndependentAssignmentRepository(private val dao: BotAssignmen
         batch: BotWorkBatch?,
     ) { dao.createIndependent(task.toEntity(json), session, request.toEntity(), batch?.toEntity()) }
     override suspend fun createIndependentOnce(task: BotAssignment, session: HarnessSessionEntity,
-        request: BotAssignmentRequest, batch: BotWorkBatch?, operationId: String?, nativeTaskId: String?): String =
-        dao.createIndependent(task.toEntity(json), session, request.toEntity(), batch?.toEntity(), operationId, nativeTaskId)
+        request: BotAssignmentRequest, batch: BotWorkBatch?, operationId: String?, nativeTaskId: String?, trustedNativeTeamStart: Boolean, sourceSessionId: String?): String =
+        dao.createIndependent(task.toEntity(json), session, request.toEntity(), batch?.toEntity(), operationId, nativeTaskId, trustedNativeTeamStart, sourceSessionId)
     override suspend fun dispatchedBots(groupId: String, operationId: String, nativeTaskId: String?) = dao.dispatchedBots(groupId, operationId, nativeTaskId).toSet()
     override suspend fun enqueueRequest(request: BotAssignmentRequest) = dao.enqueueRequest(request.toEntity())
     override fun pendingRequests() = dao.pendingAssignmentRequests().map { rows -> rows.map { it.model() } }

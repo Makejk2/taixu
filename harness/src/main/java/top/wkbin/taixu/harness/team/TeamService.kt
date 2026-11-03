@@ -7,6 +7,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.*
 import top.wkbin.taixu.core.model.bot.*
+import top.wkbin.taixu.harness.bot.IndependentTeamStart
 
 /** Proposals are immutable, session-bound, expiring and one-shot. Restart never re-authorizes one. */
 internal class TeamService(
@@ -70,10 +71,10 @@ internal class TeamService(
                     if (text(op, "op") == "create") put("teamId", UUID.randomUUID().toString())
                     if (text(op, "op") == "start") put("groupId", UUID.randomUUID().toString())
                 }
-                validate(canonical)
+                validate(canonical, session)
                 proposals.entries.removeAll { it.value.consumed || clock() - it.value.createdAt > TTL }
                 require(proposals.size < 256) { "待审批提案过多" }
-                val p = Proposal(UUID.randomUUID().toString(), session, reason, canonical, before(canonical), clock())
+                val p = Proposal(UUID.randomUUID().toString(), session, reason, canonical, before(canonical, session), clock())
                 // Durable audit before retaining/returning the proposal; an audit failure fails closed.
                 audit(session, "proposed", describe(p))
                 proposals[p.id] = p
@@ -88,8 +89,8 @@ internal class TeamService(
     suspend fun prepare(session: String, id: String, callId: String): String = lock.withLock {
         owner(session)
         val p = proposal(session, id)
-        require(before(p.operation) == p.before) { "审批前目标快照已变化，请重新提案" }
-        validate(p.operation)
+        require(before(p.operation, session) == p.before) { "审批前目标快照已变化，请重新提案" }
+        validate(p.operation, session)
         val description = "团队变更必须由用户原生批准（完全访问也不豁免）。\n${describe(p)}"
         audit(session, "approval_requested", description)
         p.pendingCall = callId
@@ -100,13 +101,13 @@ internal class TeamService(
         owner(session)
         val p = proposal(session, id)
         require(p.pendingCall == callId) { "没有匹配当前调用的原生审批请求" }
-        require(before(p.operation) == p.before) { "目标状态已变化；原批准失效，请重新提案" }
-        validate(p.operation)
+        require(before(p.operation, session) == p.before) { "目标状态已变化；原批准失效，请重新提案" }
+        validate(p.operation, session)
         // Mark before any side effect. A cancellation, crash or partial failure is never retried.
         audit(session, "applying", describe(p))
         p.consumed = true
         try {
-            val output = mutate(p.operation)
+            val output = mutate(p.operation, session, p.id)
             audit(session, "applied", "${p.id}\n$output")
             output
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -116,20 +117,21 @@ internal class TeamService(
         }
     }
 
-    private suspend fun before(op: JsonObject): String = when (text(op, "op")) {
+    private suspend fun before(op: JsonObject, session: String): String = when (text(op, "op")) {
         "create" -> "new-team:${required(op, "teamId")};existingMembers:${memberState(members(op))}"
         "stop" -> Json.encodeToString(requireNotNull(port.group(required(op, "groupId"))) { "群聊不存在" })
-        else -> team(required(op, "teamId")).let { render(it) + "\nmembers:" + memberState(it.memberIds + it.publishedSnapshot?.memberIds.orEmpty()) }
+        else -> team(required(op, "teamId")).let { render(it) + "\nmembers:" + memberState(it.memberIds + it.publishedSnapshot?.memberIds.orEmpty()) } +
+            if (text(op, "op") == "start") "\nsource:" + port.startSourceSnapshot(session) else ""
     }
 
     private suspend fun memberState(ids: List<String>) = ids.distinct().sorted().map { port.memberSnapshot(it) }.joinToString("\n")
 
-    private suspend fun validate(op: JsonObject) {
+    private suspend fun validate(op: JsonObject, session: String) {
         val allowed = when (text(op, "op")) {
             "create" -> setOf("op", "teamId", "name", "memberIds", "members", "definition")
             "draft" -> setOf("op", "teamId", "expectedRevision", "name", "memberIds", "definition")
             "publish" -> setOf("op", "teamId", "expectedRevision")
-            "start" -> setOf("op", "teamId", "groupId", "name", "task")
+            "start" -> setOf("op", "teamId", "groupId", "name", "task", "members")
             "stop" -> setOf("op", "groupId")
             else -> error("未知团队操作")
         }
@@ -167,6 +169,8 @@ internal class TeamService(
                 require(t.publishedVersion > 0 && t.publishedSnapshot != null) { "请先发布团队" }
                 require(required(op, "task").length <= 30_000) { "任务过长" }
                 require(port.group(required(op, "groupId")) == null) { "启动群已经存在，禁止重复派发" }
+                val published = requireNotNull(t.publishedSnapshot)
+                port.validateStart(session, published, startMembers(op, published))
             }
             "stop" -> {
                 val g = requireNotNull(port.group(required(op, "groupId"))) { "群聊不存在" }
@@ -176,12 +180,30 @@ internal class TeamService(
         }
     }
 
+    private suspend fun startMembers(op: JsonObject, published: TeamPublishedVersion): List<IndependentTeamStart.Member> {
+        if ("members" !in op) return published.memberIds.map { id ->
+            val snapshot = Json.parseToJsonElement(port.memberSnapshot(id)).jsonObject
+            val role = text(snapshot, "role").ifBlank { id }
+            IndependentTeamStart.Member(id, "按你的原生角色「$role」独立承担总体任务中对应职责，向团队汇报结果或阻塞。总体任务：\n${required(op, "task")}")
+        }
+        return requireNotNull(op["members"]).jsonArray.map { value ->
+            val member = value.jsonObject
+            require(member.keys.all { it in setOf("botId", "instruction", "writePaths") }) { "不支持的成员启动参数" }
+            val paths = member["writePaths"]?.jsonArray?.map { path ->
+                val p = path.jsonPrimitive
+                require(p.isString) { "writePaths 必须是字符串数组" }
+                p.content
+            }.orEmpty()
+            IndependentTeamStart.Member(required(member, "botId"), required(member, "instruction"), paths)
+        }.also { require(it.isNotEmpty()) { "启动成员不能为空" } }
+    }
+
     private fun draft(op: JsonObject, old: BotMemberGroup) = old.copy(
         name = if ("name" in op) text(op, "name") else old.name,
         memberIds = if ("memberIds" in op) members(op) else old.memberIds,
         definition = if ("definition" in op) definition(op) else old.definition,
     )
-    private suspend fun mutate(op: JsonObject): String = when (text(op, "op")) {
+    private suspend fun mutate(op: JsonObject, session: String, proposalId: String): String = when (text(op, "op")) {
         "create" -> create(op)
         "draft" -> {
             val next = draft(op, team(required(op, "teamId")))
@@ -198,8 +220,8 @@ internal class TeamService(
             port.createGroup(group, t.id)
             val actual = requireNotNull(port.group(id))
             require(actual.teamGroupId == t.id && actual.teamVersion == published.version) { "发布版本竞态；已建群 $id，但未启动，请核对" }
-            port.start(id, required(op, "task"))
-            "已持久建群并提交独立团队执行：groupId=$id，team=${t.id}@${published.version}；不代表任务已完成，请 status 查询"
+            val result = port.start(IndependentTeamStart.Request(id, session, "team-start:$proposalId", published, startMembers(op, published)))
+            "已持久建群并原生受理独立任务：groupId=$id，team=${t.id}@${published.version}；receipts=${result.receipts}；仅代表已排队，不代表正在运行或任务已完成，请 status 查询"
         }
         "stop" -> {
             val id = required(op, "groupId")

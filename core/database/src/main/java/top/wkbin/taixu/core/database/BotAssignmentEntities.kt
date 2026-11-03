@@ -64,7 +64,7 @@ data class BotAssignmentEntity(
 )
 
 @Dao
-interface BotAssignmentDao : GroupDeliveryDao, BotAssignmentRequestDao, AssignmentHierarchyDao, TaskBudgetDao, GroupGovernanceDao, AssignmentWorkDao {
+interface BotAssignmentDao : NativeTeamStartDao, GroupDeliveryDao, BotAssignmentRequestDao, AssignmentHierarchyDao, TaskBudgetDao, GroupGovernanceDao, AssignmentWorkDao {
     @Query("SELECT * FROM bot_assignments WHERE botId = :botId AND independent = 1")
     suspend fun assignmentsForBot(botId: String): List<BotAssignmentEntity>
 
@@ -79,13 +79,19 @@ interface BotAssignmentDao : GroupDeliveryDao, BotAssignmentRequestDao, Assignme
         batch: BotWorkBatchEntity? = null,
         dispatchOperationId: String? = null,
         nativeTaskId: String? = null,
+        trustedNativeTeamStart: Boolean = false,
+        sourceSessionId: String? = null,
     ): String {
         require(task.independent && task.sessionId == session.id && request.assignmentId == task.id)
         val group = requireNotNull(task.groupId)
         require(deliveryMember(group, task.botId)) { "执行成员已移出群聊" }
         require(task.reportToBotId != null && deliveryMember(group, task.reportToBotId)) { "请求者已移出群聊" }
         val team = effectiveTeam(group)
-        require(team.canAssign(task.reportToBotId, task.botId) || governance(group).canRoute(task.reportToBotId, task.botId)) { "只能向本群直属下级派发新任务" }
+        if (trustedNativeTeamStart) {
+            validateNativeTeamRoot(task, session, batch, sourceSessionId, dispatchOperationId, group, team)
+        } else {
+            require(team.canAssign(task.reportToBotId, task.botId) || governance(group).canRoute(task.reportToBotId, task.botId)) { "只能向本群直属下级派发新任务" }
+        }
         val boundWork = task.proposalId?.let { proposal(it) }?.rootWorkId
         require(boundWork == null || task.rootWorkId == boundWork) { "方案所属业务任务不匹配" }
         existingWorkTask(task.copy(teamBinding = linkedBinding(group)))?.let {
