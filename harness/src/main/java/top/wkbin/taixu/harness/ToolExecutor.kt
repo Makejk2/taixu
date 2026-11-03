@@ -80,6 +80,7 @@ class ToolExecutor(
     private val governanceGuard: top.wkbin.taixu.harness.bot.GroupGovernanceGuard? = null,
     private val environments: top.wkbin.taixu.harness.environment.SessionExecutionEnvironments? = null,
     private val appConfigBackend: top.wkbin.taixu.harness.config.AppConfigToolBackend? = null,
+    private val workflowAdminBackend: top.wkbin.taixu.harness.admin.AppAdminBackend? = null,
     private val teamBackend: top.wkbin.taixu.harness.team.TeamToolBackend? = null,
     private val appModulesBackend: (suspend (String) -> top.wkbin.taixu.harness.directory.AppModulesToolBackend)? = null,
     private val aiAdminBoundary: suspend (suspend (Pair<Boolean, Long>) -> ToolResult) -> ToolResult = { it(false to 0L) },
@@ -91,7 +92,6 @@ class ToolExecutor(
         snapshots = mutationSnapshots,
         environments = environments,
     )
-
     /** 领域能力插槽路由表：把工具分派从分支逻辑降为一次查表（新增工具零改动管道层）。 */
     private val routing = ToolRouting(
         workspaceTools = workspaceTools,
@@ -153,7 +153,7 @@ class ToolExecutor(
                 { sessionDao?.findById(it) != null }, appModulesBackend)
         if (toolCall.tool in setOf(HarnessTool.TEAM, HarnessTool.APP_CONFIG)) return aiAdminBoundary { snapshot ->
             val enabled = aiAdminEpochGate.check(snapshot) {
-                teamBackend?.disableManagement(); appConfigBackend?.disableManagement()
+                teamBackend?.disableManagement(); appConfigBackend?.disableManagement(); workflowAdminBackend?.disableManagement()
             }
             if (!enabled && top.wkbin.taixu.harness.team.aiAdminRequiresEnabled(HarnessApiMapper.apiName(toolCall.tool), toolCall.args)) {
                 val reason = "AI 超管未开启；请由用户在设置 → Agent 执行与上下文手动开启。AI 不可自行开启。"
@@ -166,7 +166,7 @@ class ToolExecutor(
                     toolCall, sessionId, bypassApproval, now,
                 ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }
             } else {
-                top.wkbin.taixu.harness.config.executeAppConfig(appConfigBackend, approvalPolicyEngine,
+                top.wkbin.taixu.harness.admin.routeAdminConfiguration(appConfigBackend, workflowAdminBackend, approvalPolicyEngine,
                     { id -> sessionDao?.findById(id)?.let { row -> row.runMode?.let(RunMode::fromId) ?: approvalRepository?.currentRunMode() ?: RunMode.PLAN } },
                     toolCall, sessionId, bypassApproval, now,
                 ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }

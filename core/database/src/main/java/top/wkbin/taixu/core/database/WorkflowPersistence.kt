@@ -125,6 +125,25 @@ interface WorkflowDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertExecution(entity: WorkflowExecutionLogEntity)
 
+    /** Read, compare and write share Room's writer transaction, including native editor writes. */
+    @Transaction
+    suspend fun upsertCustomIfUnchanged(entity: WorkflowEntity, expectedHash: String): Boolean {
+        val current = findById(entity.id)
+        require(!entity.isBuiltin && BuiltinWorkflows.all.none { it.id == entity.id } &&
+            current?.isBuiltin != true) { "禁止覆盖内置工作流" }
+        if (!WorkflowDefinitionCas.matches(current, expectedHash)) return false
+        upsert(entity)
+        return true
+    }
+
+    @Transaction
+    suspend fun deleteCustomIfUnchanged(id: String, expectedHash: String): Boolean {
+        val current = findById(id)
+        if (!WorkflowDefinitionCas.matches(current, expectedHash)) return false
+        // Preserve deleteCustom's native FK cascades and built-in guard.
+        return deleteCustom(id) > 0
+    }
+
     @Transaction
     suspend fun saveRun(parent: WorkflowEntity, log: WorkflowExecutionLogEntity) {
         insertIfMissing(parent)
@@ -200,6 +219,9 @@ interface WorkflowRepository {
     suspend fun findBySlashCommand(command: String): WorkflowDefinition?
     suspend fun upsert(definition: WorkflowDefinition)
     suspend fun deleteCustom(id: String): Boolean
+    /** Unsupported repositories MUST fail closed; never implement with a read then upsert. */
+    suspend fun upsertCustomIfUnchanged(definition: WorkflowDefinition, expectedHash: String): Boolean = false
+    suspend fun deleteCustomIfUnchanged(id: String, expectedHash: String): Boolean = false
     suspend fun ensureBuiltins()
     suspend fun saveExecution(
         state: WorkflowRuntimeState,
@@ -229,6 +251,15 @@ class RoomWorkflowRepository(
         require(issues.isEmpty()) { issues.joinToString(separator = "; ") { it.message } }
         dao.upsert(definition.toEntity())
     }
+
+    override suspend fun upsertCustomIfUnchanged(definition: WorkflowDefinition, expectedHash: String): Boolean {
+        val issues = WorkflowValidator.validate(definition)
+        require(issues.isEmpty()) { issues.joinToString(separator = "; ") { it.message } }
+        return dao.upsertCustomIfUnchanged(definition.toEntity(), expectedHash)
+    }
+
+    override suspend fun deleteCustomIfUnchanged(id: String, expectedHash: String): Boolean =
+        dao.deleteCustomIfUnchanged(id, expectedHash)
 
     override suspend fun deleteCustom(id: String): Boolean = dao.deleteCustom(id) > 0
 
