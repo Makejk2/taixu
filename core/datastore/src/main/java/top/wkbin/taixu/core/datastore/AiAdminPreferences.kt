@@ -17,12 +17,17 @@ class AiAdminPreferences(store: SettingsDataStore) {
     val snapshot = data.data.map { (it[enabledKey] ?: false) to (it[revisionKey] ?: 0L) }
     suspend fun <T> withManagementSnapshot(block: suspend (Pair<Boolean, Long>) -> T): T =
         AiAdminCoordinator.serialized { block(snapshot.first()) }
-    suspend fun setEnabledByUser(value: Boolean) = AiAdminCoordinator.serialized { data.edit {
-        if ((it[enabledKey] ?: false) != value) {
-            it[enabledKey] = value
-            it[revisionKey] = (it[revisionKey] ?: 0L) + 1L
+    /** 显式返回 Unit：`data.edit {}` 返回 Preferences，而该类来自 implementation 依赖，
+     *  不能泄漏到 feature 模块的调用签名里，否则调用方编译失败。 */
+    suspend fun setEnabledByUser(value: Boolean): Unit = AiAdminCoordinator.serialized {
+        data.edit {
+            if ((it[enabledKey] ?: false) != value) {
+                it[enabledKey] = value
+                it[revisionKey] = (it[revisionKey] ?: 0L) + 1L
+            }
         }
-    } }
+        Unit
+    }
 
 }
 
