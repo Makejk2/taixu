@@ -40,7 +40,7 @@ class TeamCommunicationMigrationTest {
             listOf("pending", "running", "completed", "admitted", "cancelled").forEachIndexed { index, status ->
                 val id = "peer:${5-index}"
                 db.execSQL("INSERT INTO bot_assignment_requests(id,assignmentId,instruction,createdAt,status,artifactsJson) VALUES (?,'target',?,?,?,'[]')",
-                    arrayOf(id, """{"sourceAssignmentId":"source","sourceMemberId":"a","hop":1}""", 100L-index, status))
+                    arrayOf<Any?>(id, """{"sourceAssignmentId":"source","sourceMemberId":"a","hop":1}""", 100L-index, status))
             }
         }
         helper.runMigrationsAndValidate(path, 86, true, MIGRATION_85_86).use { db ->
