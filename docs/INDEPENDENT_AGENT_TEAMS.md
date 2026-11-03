@@ -184,3 +184,13 @@
 当前 AT-01 至 AT-09 **全部未验收**。登记模板：`AT 编号 | 状态（未验收/通过/失败/阻塞）| 实现提交 | 精确测试/操作 | 证据路径 | 剩余缺口`。本次没有通过数，也没有以“已有覆盖”抵消任何未验收目标。
 
 仅当完整脚本及负向门禁都有可复核证据、无真实付费请求、未知副作用计数不增长、所有缺口明确关闭，才可宣称满足用户的独立团队需求。文档落盘完成不等于团队功能验收完成。
+
+
+## 实际实现与证据更新（待真机验收）
+
+- 团队版提交 2e78e23f 的云端运行 41468205840 完整单测和 APK 构建成功。不是本地文档推断。
+- 实际新增回归类是 `TeamServiceTest`、`BotAssignmentRuntimeTest`；后者有“members exchange durable messages while sender runs and parent conversation stops”，使用Room和假SessionControl，验证双向消息、源任务工作中目标独立处理、主会话停止不取消成员以及忙时排队。没有调用真实付费模型。
+- 对话入口 `team` 使用 `propose(reason, operation)` → `apply(proposalId)`；创建/草稿/发布/启动/停止均逐次原生批准。启动团队要先完成发布；不自动升级旧版本。
+- 成员通过 `use_capability inspect` 发现真实 Bot 管理插件，在独立任务中使用 `list-member-inboxes` 得到同伴任务ID，`send-member-message(assignment_id,message,message_id)`发送。信封原生生成，正文是不可信同伴数据，不是用户授权。
+- 同伴对话有防自激资源限制；这是独立任务的限额，不是回退为invoke_subagent。中断的未知副作用任务不因新消息自动重启。
+- 新增手动超管开关与并发撤权测试，最终CI待当前提交验证。AT-01至09仍需按上表逐项登记，不能把模拟并发等同手机后台永驻或原生点击已验收。

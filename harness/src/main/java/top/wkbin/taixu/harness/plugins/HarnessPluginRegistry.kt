@@ -52,6 +52,11 @@ class HarnessPluginRegistry(plugins: List<HarnessPlugin>, private val external: 
 
     val descriptors: List<PluginDescriptor> get() = entries.map { it.descriptor }
     private fun owner(server: String) = entries.singleOrNull { server == "plugin.${it.descriptor.id}" }
+
+    /** Read-only schema snapshot for a registered plugin's own tools; no execution. */
+    fun registeredToolSchemas(pluginId: String): Map<String, JsonObject> =
+        entries.singleOrNull { it.descriptor.id == pluginId }?.tools
+            ?.associate { it.id to it.schema }.orEmpty()
     fun handles(server: String) = server.startsWith("plugin.")
     fun node(pluginId: String, extension: String): PluginWorkflowNode? = entries.singleOrNull { it.descriptor.id == pluginId || it.packageId == pluginId }?.nodes?.singleOrNull { it.id == extension }
     fun summaries(): String = entries.filter { it.tools.isNotEmpty() }.joinToString("\n") { "- plugin.${it.descriptor.id} · ${it.tools.size} 个插件工具" }

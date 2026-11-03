@@ -142,7 +142,7 @@ class ApprovalPolicyEngine(
         rawToolName: String? = null,
     ): String? = when (tool) {
         HarnessTool.TEAM -> if (args["action"]?.jsonPrimitive?.content in setOf("list", "get", "status", "proposal")) null else "team 在 PLAN 中仅允许查询。"
-        HarnessTool.APP_CONFIG -> if (args["action"]?.jsonPrimitive?.content in setOf("list", "get", "grants")) null else "app_config 在 PLAN 中仅允许 list/get/grants。"
+        HarnessTool.APP_CONFIG -> if (args["action"]?.jsonPrimitive?.content in setOf("list", "get", "grants", "modules", "inspect_module")) null else "app_config 在 PLAN 中仅允许查询。"
 
         // 只读检索与元操作：全放
         HarnessTool.READ, HarnessTool.MEMORY, HarnessTool.PLAN, HarnessTool.SCRATCHPAD,

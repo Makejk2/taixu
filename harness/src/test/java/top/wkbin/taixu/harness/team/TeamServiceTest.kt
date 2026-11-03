@@ -52,6 +52,15 @@ class TeamServiceTest {
         service.applyNative(session, proposal, "native-call")
     }
 
+    @Test fun disablingErasesNativeApprovedManagementProposals() = runBlocking {
+        val port = Port(); val service = TeamService(port, TeamAudit { _, _, _ -> })
+        val proposal = id(service.execute("owner", create()))
+        service.prepare("owner", proposal, "native-call")
+        service.disableManagement()
+        expectFailure { service.applyNative("owner", proposal, "native-call") }
+        assertEquals(0, port.writes)
+    }
+
     @Test fun immutableReasonAndNativeSingleUse() = runBlocking {
         val port = Port(); val audit = mutableListOf<String>()
         val service = TeamService(port, TeamAudit { _, action, detail -> audit += "$action:$detail" })

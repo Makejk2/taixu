@@ -125,6 +125,8 @@ internal class AppConfigGrantStore(
         session.values.sortedBy { it.expiresAt }
     }
 
+    fun revokeAll() { synchronized(grants) { grants.clear() } }
+
     internal companion object {
         const val MIN_TTL_MILLIS: Long = 60_000L
         const val DEFAULT_MAX_TTL_MILLIS: Long = 30 * 60_000L

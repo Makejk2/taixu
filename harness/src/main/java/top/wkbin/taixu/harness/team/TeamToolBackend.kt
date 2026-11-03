@@ -5,6 +5,8 @@ import kotlinx.serialization.json.JsonObject
 
 /** Host-only adapter. There is deliberately no userConfirmed/approvalMode argument in the schema. */
 class TeamToolBackend internal constructor(internal val service: TeamService) {
+    suspend fun disableManagement() = service.disableManagement()
+
     suspend fun audit(sessionId: String, action: String, detail: String) = service.audit(sessionId, action, detail)
 
     /** Reads and proposals only. Applying a proposal is exclusively an ExecutionGate operation. */

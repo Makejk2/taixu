@@ -271,10 +271,7 @@ fun AgentSettingsScreen(
                         onCheckedChange = { arg0 -> viewModel?.setCommandOutputCompressionEnabled(arg0) },
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    ApprovalModeSelectorRow(
-                        mode = approvalMode,
-                        onModeChange = { arg0 -> viewModel?.setApprovalMode(arg0) },
-                    )
+                    AiAdminAndApprovalRows(approvalMode) { viewModel?.setApprovalMode(it) }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     RunModeSelectorRow(
                         mode = runMode,

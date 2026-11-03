@@ -23,6 +23,17 @@ class AppConfigServiceTest {
     private suspend fun denied(block: suspend () -> Unit) {
         try { block(); fail("Expected fail closed") } catch (_: IllegalArgumentException) { } catch (_: IllegalStateException) { }
     }
+    @Test fun disablingClearsPendingChangesAndExistingGrants() = runBlocking {
+        val first = proposal()
+        service.apply("s", first, true)
+        assertTrue(grants.isActive("s", "appearance.theme"))
+        val next = proposal(value = "light")
+        service.disableManagement()
+        assertFalse(grants.isActive("s", "appearance.theme"))
+        denied { service.apply("s", next, true) }
+        assertEquals("dark", values["appearance.theme"])
+    }
+
     @Test fun proposalIsNotApprovalAndJsonCannotApprove() = runBlocking {
         val p = proposal()
         assertTrue(service.approval("s", p).first)

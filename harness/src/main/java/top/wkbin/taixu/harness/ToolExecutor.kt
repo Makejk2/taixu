@@ -81,7 +81,10 @@ class ToolExecutor(
     private val environments: top.wkbin.taixu.harness.environment.SessionExecutionEnvironments? = null,
     private val appConfigBackend: top.wkbin.taixu.harness.config.AppConfigToolBackend? = null,
     private val teamBackend: top.wkbin.taixu.harness.team.TeamToolBackend? = null,
+    private val appModulesBackend: (suspend (String) -> top.wkbin.taixu.harness.directory.AppModulesToolBackend)? = null,
+    private val aiAdminBoundary: suspend (suspend (Pair<Boolean, Long>) -> ToolResult) -> ToolResult = { it(false to 0L) },
 ) {
+    private val aiAdminEpochGate = top.wkbin.taixu.harness.team.AiAdminEpochGate()
     private val mutationSnapshots = WorkspaceMutationSnapshots(checkpointStore, eventBus)
     private val workspaceTools = workspaceToolBackend ?: WorkspaceToolBackend(
         operationsFor = { workspace -> if (workspace.isNotBlank()) fileAccess.withBase(workspace) else fileAccess },
@@ -145,18 +148,29 @@ class ToolExecutor(
         operationId: String? = null,
     ): ToolResult {
         val now = System.currentTimeMillis()
-        if (toolCall.tool == HarnessTool.TEAM) {
-            return top.wkbin.taixu.harness.team.executeTeam(teamBackend,
-                { id -> sessionDao?.findById(id)?.runMode?.let(RunMode::fromId) },
-                toolCall, sessionId, bypassApproval, now,
-            ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }
-        }
-        if (toolCall.tool == HarnessTool.APP_CONFIG) {
-            return top.wkbin.taixu.harness.config.executeAppConfig(
-                appConfigBackend, approvalPolicyEngine,
-                { id -> sessionDao?.findById(id)?.runMode?.let(RunMode::fromId) },
-                toolCall, sessionId, bypassApproval, now,
-            ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }
+        if (toolCall.tool == HarnessTool.APP_CONFIG && toolCall.args["action"]?.jsonPrimitive?.content in setOf("modules", "inspect_module"))
+            return top.wkbin.taixu.harness.directory.executeAppModules(sessionId, toolCall, now,
+                { sessionDao?.findById(it) != null }, appModulesBackend)
+        if (toolCall.tool in setOf(HarnessTool.TEAM, HarnessTool.APP_CONFIG)) return aiAdminBoundary { snapshot ->
+            val enabled = aiAdminEpochGate.check(snapshot) {
+                teamBackend?.disableManagement(); appConfigBackend?.disableManagement()
+            }
+            if (!enabled && top.wkbin.taixu.harness.team.aiAdminRequiresEnabled(HarnessApiMapper.apiName(toolCall.tool), toolCall.args)) {
+                val reason = "AI 超管未开启；请由用户在设置 → Agent 执行与上下文手动开启。AI 不可自行开启。"
+                if (toolCall.tool == HarnessTool.TEAM) teamBackend?.audit(sessionId, "admin_disabled", reason)
+                else appConfigBackend?.audit(sessionId, "admin_disabled", reason)
+                ToolResult(UUID.randomUUID().toString(), now, toolCall.id, false, reason)
+            } else if (toolCall.tool == HarnessTool.TEAM) {
+                top.wkbin.taixu.harness.team.executeTeam(teamBackend,
+                    { id -> sessionDao?.findById(id)?.let { row -> row.runMode?.let(RunMode::fromId) ?: approvalRepository?.currentRunMode() ?: RunMode.PLAN } },
+                    toolCall, sessionId, bypassApproval, now,
+                ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }
+            } else {
+                top.wkbin.taixu.harness.config.executeAppConfig(appConfigBackend, approvalPolicyEngine,
+                    { id -> sessionDao?.findById(id)?.let { row -> row.runMode?.let(RunMode::fromId) ?: approvalRepository?.currentRunMode() ?: RunMode.PLAN } },
+                    toolCall, sessionId, bypassApproval, now,
+                ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }
+            }
         }
         // ask_user 是向用户提问的动作本身，不走审批门控（策略引擎对它亦豁免）：
         // 委托 AskUserToolBackend 走提问生命周期——落一条 pending 请求（复用审批请求的

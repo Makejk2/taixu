@@ -983,9 +983,9 @@ class ProviderClient internal constructor(
             ApiToolDefinition(
                 function = ApiFunctionDefinition(
                     name = "app_config",
-                    description = "受控应用配置：只支持真实主题、动态取色、应用字体比例、终端字号和触觉反馈。list/get/grants 只读。propose 必须给 key/value/reason，返回不可变 changeId；apply 仅传 changeId，通过原生用户审批后写入。授权绑定当前会话/单键/TTL，高风险每次确认。revoke 撤销当前会话单键或全部授权。rollback 用成功 changeId 和 reason 创建恢复提案，再 apply；禁止模型指定恢复值。权限设置只能生成提议并提示用户手动操作，模型不能授权自己。",
+                    description = "受控应用配置：只支持真实主题、动态取色、应用字体比例、终端字号和触觉反馈。modules/inspect_module(module) 只读列出真实已注册模块及未开放API，不执行或授权；list/get/grants 只读。propose 必须给 key/value/reason，返回不可变 changeId；apply 仅传 changeId，通过原生用户审批后写入。授权绑定当前会话/单键/TTL，高风险每次确认。revoke 撤销当前会话单键或全部授权。rollback 用成功 changeId 和 reason 创建恢复提案，再 apply；禁止模型指定恢复值。权限设置只能生成提议并提示用户手动操作，模型不能授权自己。",
                     parameters = Json.parseToJsonElement(
-                        """{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["list","get","propose","apply","rollback","grants","revoke"]},"key":{"type":"string"},"value":{"type":"string"},"reason":{"type":"string","maxLength":500},"changeId":{"type":"string"},"ttl_seconds":{"type":"integer","minimum":60,"maximum":1800}},"required":["action"]}""",
+                        """{"type":"object","additionalProperties":false,"properties":{"action":{"type":"string","enum":["list","get","modules","inspect_module","propose","apply","rollback","grants","revoke"]},"key":{"type":"string"},"value":{"type":"string"},"reason":{"type":"string","maxLength":500},"changeId":{"type":"string"},"ttl_seconds":{"type":"integer","minimum":60,"maximum":1800},"module":{"type":"string"}},"required":["action"]}""",
                     ).jsonObject,
                 ),
             ),

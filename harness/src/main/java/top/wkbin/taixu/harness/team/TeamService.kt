@@ -20,6 +20,8 @@ internal class TeamService(
     private val lock = Mutex()
     private val proposals = LinkedHashMap<String, Proposal>()
 
+    suspend fun disableManagement() = lock.withLock { proposals.entries.removeAll { text(it.value.operation, "op") != "stop" } }
+
     suspend fun audit(session: String, action: String, detail: String) = journal.record(session, action, detail)
     private suspend fun owner(session: String) {
         require(session.isNotBlank()) { "必须绑定原生会话" }

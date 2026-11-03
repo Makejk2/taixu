@@ -38,6 +38,8 @@ internal class AppConfigService(
     private val pending = LinkedHashMap<String, AppConfigChange>()
     private val applied = LinkedHashMap<String, AppConfigChange>()
 
+    suspend fun disableManagement() = lock.withLock { pending.clear(); grants.revokeAll() }
+
     suspend fun record(session: String, action: String, detail: String) =
         audit.record(AppConfigAuditEntry(session, action, detail, clock()))
 

@@ -6,6 +6,8 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /** Public adapter keeps the configuration service internal and accepts no userConfirmed field. */
 class AppConfigToolBackend internal constructor(private val service: AppConfigService) {
+    suspend fun disableManagement() = service.disableManagement()
+
     suspend fun audit(session: String, action: String, detail: String) = service.record(session, action, detail)
     suspend fun approval(session: String, args: JsonObject): Pair<Boolean, String> =
         service.approval(session, args["changeId"]?.jsonPrimitive?.content.orEmpty())

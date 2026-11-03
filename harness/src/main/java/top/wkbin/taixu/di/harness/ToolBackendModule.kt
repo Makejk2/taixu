@@ -223,6 +223,25 @@ internal val toolBackendModule = module {
             workspaceToolBackend = get(), governanceGuard = get(),
             environments = get(),
             appConfigBackend = get(), teamBackend = get(),
+            appModulesBackend = { id ->
+                val session = requireNotNull(get<top.wkbin.taixu.core.database.HarnessSessionRepository>().findById(id))
+                val model = get<top.wkbin.taixu.harness.ProviderClient>().resolveConfigured(session.modelId, session.modelVariant)
+                top.wkbin.taixu.harness.directory.AppModulesToolBackend(top.wkbin.taixu.harness.directory.AppModuleDirectory(
+                    visibleNativeToolNames = { if (model.pureChatMode) emptySet() else top.wkbin.taixu.harness.ProviderClient.buildDynamicTools(model).map { it.function.name }.toSet() },
+                    registeredPluginsSnapshot = {
+                        val registry = get<top.wkbin.taixu.harness.plugins.HarnessPluginRegistry>()
+                        registry.descriptors.map { descriptor ->
+                            top.wkbin.taixu.harness.directory.AppModuleDirectory.RegisteredPlugin.fromRegisteredDescriptor(
+                                descriptor,
+                                registry.registeredToolSchemas(descriptor.id),
+                            )
+                        }
+                    },
+                    hostBackendBound = { true },
+                    // MCP effective availability may run native probes; leave unbound rather than start anything here.
+                ))
+            },
+            aiAdminBoundary = { block -> top.wkbin.taixu.core.datastore.AiAdminPreferences(get()).withManagementSnapshot(block) },
         )
     }
 
