@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://taixu-lab.github.io/taixu/sitemap.xml

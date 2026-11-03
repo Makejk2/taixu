@@ -1,4 +1,0 @@
-<resources>
-    <string name="terminal_plugin_title">Terminal</string>
-    <string name="terminal_plugin_description">Interactive shells and project commands</string>
-</resources>
