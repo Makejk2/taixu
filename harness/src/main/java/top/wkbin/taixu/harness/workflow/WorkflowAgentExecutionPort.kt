@@ -8,7 +8,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import top.wkbin.taixu.core.database.AiModelRepository
 import top.wkbin.taixu.core.database.HarnessSessionEntity
 import top.wkbin.taixu.core.database.HarnessSessionRepository
-import top.wkbin.taixu.core.model.ApprovalMode
+import kotlinx.coroutines.currentCoroutineContext
+import top.wkbin.taixu.harness.subagent.WorkflowLaneAuthority
 import top.wkbin.taixu.harness.SubagentOrchestrator
 import top.wkbin.taixu.harness.subagent.SubagentLaneRunner
 
@@ -49,11 +50,15 @@ class HarnessWorkflowAgentExecutionPort(
     private val models: AiModelRepository,
     private val laneRunner: SubagentLaneRunner,
     private val subagentOrchestrator: SubagentOrchestrator,
+    private val provider: () -> top.wkbin.taixu.harness.ProviderClient = { error("WORKFLOW_MODEL_RESOLVER_UNAVAILABLE") },
 ) : WorkflowAgentExecutionPort {
     private val sessionCreationMutex = Mutex()
 
     override suspend fun infer(request: WorkflowAgentRequest): WorkflowAgentResult {
         val session = ensureSession(request)
+        val frozenRow = requireNotNull(models.findById(requireNotNull(session.modelId)))
+        val configured = provider().resolveSavedModelProfile(frozenRow.id,requireNotNull(session.modelVariant))
+        check(models.findById(frozenRow.id) == frozenRow) { "来源模型在解析期间变化，需重新批准" }
         val result = laneRunner.run(
             sessionId = session.id,
             laneName = "subagent:workflow-agent:${request.nodeId}",
@@ -61,6 +66,7 @@ class HarnessWorkflowAgentExecutionPort(
             workspace = request.workspacePath,
             modelId = request.modelId ?: session.modelId,
             modelVariant = request.modelVariant ?: session.modelVariant,
+            modelConfig = configured,
             // 节点声明了写范围才启用闸门；未声明的推理节点维持原有可写行为，
             // 否则存量工作流里"生成文件"类推理节点会被静默降级成只读。
             writePaths = request.writePaths.takeIf { it.isNotEmpty() },
@@ -77,7 +83,7 @@ class HarnessWorkflowAgentExecutionPort(
                 request.role.takeIf(String::isNotBlank)?.let { put("role", JsonPrimitive(it)) }
                 request.department.takeIf(String::isNotBlank)?.let { put("department", JsonPrimitive(it)) }
                 request.agentQuery.takeIf(String::isNotBlank)?.let { put("agentQuery", JsonPrimitive(it)) }
-                request.modelId?.takeIf(String::isNotBlank)?.let { put("model", JsonPrimitive(it)) }
+                put("model", JsonPrimitive(checkNotNull(session.modelId)))
                 if (request.writePaths.isNotEmpty()) {
                     put("writePaths", JsonArray(request.writePaths.map(::JsonPrimitive)))
                 }
@@ -91,13 +97,25 @@ class HarnessWorkflowAgentExecutionPort(
         val sessionId = "workflow:${request.executionId}:${request.nodeId}"
         return sessionCreationMutex.withLock {
             val now = System.currentTimeMillis()
-            val activeModel = models.activeModel()
-            val resolvedModelId = request.modelId ?: activeModel?.id
-            val resolvedVariant = request.modelVariant
-                ?: activeModel?.takeIf { request.modelId == null || request.modelId == it.id }
-                    ?.model?.substringBefore(',')?.trim()?.takeIf(String::isNotBlank)
-            // 工作流页不展示 Harness 工具审批；FULL_ACCESS 避免 GUI 试飞卡在 screen_* 待审。
-            // 危险动作仍由工作流 HUMAN_APPROVAL 节点与用户盯屏约束。
+            val authority = checkNotNull(currentCoroutineContext()[WorkflowLaneAuthority]) {
+                "缺少可信工作流来源授权；禁止使用活动模型或默认权限"
+            }
+            check(authority.executionId == request.executionId && authority.nodeId == request.nodeId)
+            val source = authority.source
+            val binding = checkNotNull(currentCoroutineContext()[WorkflowExecutionContext]).binding
+            source.verify(binding)
+            val model = checkNotNull(models.findById(source.modelBinding.modelId)) { "来源模型已删除" }
+            val candidateFingerprint = WorkflowModelBinding.fingerprint(model)
+            if (candidateFingerprint != source.modelBinding.fingerprint) {
+                require(source.modelBinding.variant in model.model.split(',').map(String::trim)) { "原变体已删除，需重新选择并原生批准" }
+                check(authority.reviewModel(candidateFingerprint,source.modelBinding.variant)) { "用户未批准新模型配置，未执行" }
+                check(models.findById(model.id) == model) { "审阅期间模型再次变化，请重新批准" }
+            } else source.modelBinding.verify(model)
+            check(request.workspacePath == source.workspace)
+            check(request.modelId == null || request.modelId == source.modelBinding.modelId)
+            check(request.modelVariant == null || request.modelVariant == source.modelBinding.variant)
+            val resolvedModelId = source.modelBinding.modelId
+            val resolvedVariant = source.modelBinding.variant
             val existing = sessions.findById(sessionId)
             val entity = (existing ?: HarnessSessionEntity(
                 id = sessionId,
@@ -107,14 +125,18 @@ class HarnessWorkflowAgentExecutionPort(
                 modelId = resolvedModelId,
                 modelVariant = resolvedVariant,
                 workspace = request.workspacePath,
-                approvalMode = ApprovalMode.FULL_ACCESS.id,
+                approvalMode = source.approvalMode,
+                runMode = source.runMode,
+                executionTargetJson = source.targetJson,
             )).copy(
                 title = "工作流 · ${request.nodeTitle}",
                 updatedAt = now,
-                modelId = resolvedModelId ?: existing?.modelId,
-                modelVariant = resolvedVariant ?: existing?.modelVariant,
+                modelId = resolvedModelId,
+                modelVariant = resolvedVariant,
                 workspace = request.workspacePath.ifBlank { existing?.workspace.orEmpty() },
-                approvalMode = ApprovalMode.FULL_ACCESS.id,
+                approvalMode = source.approvalMode,
+                runMode = source.runMode,
+                executionTargetJson = source.targetJson,
             )
             sessions.upsert(entity)
             entity

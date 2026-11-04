@@ -38,7 +38,7 @@ data class HarnessSessionEntity(
 )
 
 @Dao
-interface HarnessSessionDao {
+interface HarnessSessionDao : SessionManagementDao {
     @Query("UPDATE harness_sessions SET executionTargetJson = :target WHERE id = :id AND (executionTargetJson IS NULL OR executionTargetJson = 'unbound')")
     suspend fun bindExecutionTargetIfAbsent(id: String, target: String)
 
@@ -107,6 +107,12 @@ interface HarnessSessionDao {
 
     @androidx.room.Transaction
     suspend fun deleteSession(id: String) {
+        val fence = managementFence(id)
+        if (fence != null && fence.mode != 0) {
+            val lease = kotlinx.coroutines.currentCoroutineContext()[SessionDeletionLease]
+            check(lease?.id == id && lease.token == fence.ownerToken &&
+                authorizeManagement(id, lease.token, 3) == 1) { "SESSION_RESERVED" }
+        }
         cancelCommunicationsForSession(id)
         cancelUnclaimedCommunicationsForSession(id)
         deleteBotAssignments(id)

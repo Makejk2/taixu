@@ -66,13 +66,20 @@ internal suspend fun importModelProfiles(
             committed = true
         }
     } catch (failure: Exception) {
-        if (!committed) withContext(NonCancellable) { stagedRefs.forEach { runCatching { credentials.removeModelApiKey(it) } } }
+        if (!committed) withContext(NonCancellable) {
+            // A database exception may arrive after a commit. Unknown references are retained,
+            // never removed merely because the caller did not receive a success response.
+            val retained=runCatching { repository.observeAll().first().mapTo(mutableSetOf()) { it.secretRef } }.getOrNull()
+            if(retained!=null) (stagedRefs-retained).forEach { ref ->
+                runCatching { credentials.retireModelApiKey(ref) }
+            }
+        }
         throw failure
     }
     // Never delete a reference still shared by another profile. Cleanup cannot undo a committed import.
     withContext(NonCancellable) {
         val retained = runCatching { repository.observeAll().first().mapTo(mutableSetOf()) { it.secretRef } }.getOrNull()
-        if (retained != null) (replacedRefs - retained).forEach { runCatching { credentials.removeModelApiKey(it) } }
+        if (retained != null) (replacedRefs - retained).forEach { runCatching { credentials.retireModelApiKey(it) } }
     }
     return imported.size
 }

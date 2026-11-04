@@ -26,6 +26,9 @@ enum class SubagentTermination {
     /** 产出了可交付的纯文本结论，且没有被拦截的待办。 */
     CONCLUDED,
 
+    /** 原Lane持久挂起，原工具尚未执行；不是完成或工具批准。 */
+    POLICY_PAUSED,
+
     /** 收场了但没有可信结论（空输出、仍在调工具、或自述未完成）。 */
     INCOMPLETE,
 

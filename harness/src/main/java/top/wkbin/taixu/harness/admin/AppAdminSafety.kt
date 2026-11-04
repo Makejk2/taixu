@@ -31,8 +31,11 @@ internal object AppAdminSafety {
         require(Json.encodeToString(value).length <= 128_000) { "定义过大" }
         val issues = WorkflowValidator.validate(value)
         require(issues.isEmpty()) { "定义未通过内置验证器（${issues.size} 项）；请在原生编辑器核对" }
-        // Plugin discovery/expansion requires separate native admission; this surface does not claim it.
-        require(value.nodes.none { it.type == WorkflowNodeType.PLUGIN_ACTION || WorkflowExpansions.SOURCE_KEY in it.config }) { "此控制面不支持插件动作或动态展开定义" }
+        // 插件节点由绑定租约逐节点冻结已安装内容身份（pluginStamps）并单独原生审批；
+        // 动态展开仍缺少完整的新图批准链，故暂在此拒绝（能力缺口，不是永久不支持）。
+        require(value.nodes.none { WorkflowExpansions.SOURCE_KEY in it.config }) {
+            "动态扩图需在完整新图原生批准链接入后启用"
+        }
         variables(value.defaultVariables)
         fun inspect(element: JsonElement) {
             when (element) {
@@ -47,8 +50,9 @@ internal object AppAdminSafety {
         }
         inspect(Json.encodeToJsonElement(value))
     }
-    /** Current native Agent port creates FULL_ACCESS sessions and cannot inherit source policy.
-     * Refuse execution here rather than silently escalating. Saving a definition is not running it.
+    /** Admission only; actual execution still requires the frozen native binding and source journal.
+     * Agent/子智能体节点在本控制面无法可信继承来源审批权限，GUI pilot 也无法自证来源模型，
+     * 因此准入阶段直接拒绝而不是静默提权；只保存定义不等于运行它。
      */
     fun runnableDefinition(value: WorkflowDefinition) {
         definition(value)

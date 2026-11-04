@@ -22,4 +22,6 @@ class ProviderRepository(
     override suspend fun setModelApiKeys(secretRef: String, values: List<String>) = providerPreferences.setModelApiKeys(secretRef, values)
     override suspend fun readModelApiKeys(secretRef: String): List<String> = providerPreferences.readModelApiKeys(secretRef)
     override suspend fun removeModelApiKey(secretRef: String) = providerPreferences.removeModelApiKey(secretRef)
+    override suspend fun retireModelApiKey(secretRef: String) = providerPreferences.retireModelApiKey(secretRef)
+    override suspend fun eraseRetiredModelKeys(referenced: Set<String>) = providerPreferences.eraseRetiredModelKeys(referenced)
 }

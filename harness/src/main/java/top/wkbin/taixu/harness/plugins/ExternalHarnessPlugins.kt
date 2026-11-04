@@ -49,6 +49,10 @@ class ExternalHarnessPlugins(private val installed: InstalledPluginCatalog, priv
                 }
             },
             packageId = spec.id,
+            originFingerprint = java.security.MessageDigest.getInstance("SHA-256")
+                .digest((binding.distroId + "\u0000" + kotlinx.serialization.json.Json.encodeToString(
+                    top.wkbin.taixu.core.model.ToolManifest.serializer(), manifest)).toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it.toInt() and 255) },
         )
     }
 

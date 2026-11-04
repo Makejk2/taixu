@@ -61,27 +61,33 @@ data class AppAdminNativeSourceState(
     val resolvedModelVariant: String? = null,
     /** Exact active local LinuxRuntime distribution. Null means run is unsupported. */
     val localDistributionId: String? = null,
+    /** 冻结的原生来源；null 表示尚未捕获可信来源，运行路径会随后拒绝。 */
+    val executionSource: top.wkbin.taixu.harness.workflow.WorkflowExecutionSource? = null,
 )
 
-/** RunManager has no remote-target argument. Never silently run a remote/unbound session locally. */
+/** Only explicitly frozen native targets are admissible; never fall back to the active target. */
 internal fun appAdminLocalRunSupported(workspace: String, targetJson: String?, native: AppAdminNativeSourceState): Boolean {
-    if (!native.supportsRun || native.localDistributionId.isNullOrBlank() ||
-        native.resolvedModelId.isNullOrBlank() || native.resolvedModelVariant.isNullOrBlank()) return false
+    if (!native.supportsRun || native.resolvedModelId.isNullOrBlank() || native.resolvedModelVariant.isNullOrBlank()) return false
     val target = runCatching {
         Json.decodeFromString<SessionExecutionTarget>(targetJson ?: return false).also { it.validate() }
     }.getOrNull() ?: return false
-    return target.remote == null && !target.distribution.startsWith("ssh:") &&
-        target.distribution == native.localDistributionId && target.workspace == workspace &&
+    // 远程目标只认冻结连接本身；本地目标仍必须等于已就绪发行版，绝不回退到当前活动目标。
+    val validOwner = if (target.remote != null) target.remote.distributionId == target.distribution
+        else target.distribution == native.localDistributionId
+    return validOwner && target.workspace == workspace &&
         workspace.startsWith("/") && workspace.split('/').none { it == "." || it == ".." } && !workspace.contains('\u0000')
 }
 
 /** Keep the start-time final defense AND reject unsupported proposals before approval/audit. */
 internal fun appAdminValidateNativeRun(definition: WorkflowDefinition, boundExecution: Boolean = false) {
     AppAdminSafety.runnableDefinition(definition)
-    require(definition.nodes.none { it.type == top.wkbin.taixu.core.model.workflow.WorkflowNodeType.HOST_ACTION || (!boundExecution && it.type in setOf(
+    require(boundExecution || definition.nodes.none { it.type in setOf(
         top.wkbin.taixu.core.model.workflow.WorkflowNodeType.BASH_COMMAND,
         top.wkbin.taixu.core.model.workflow.WorkflowNodeType.PROCESS_SERVICE,
         top.wkbin.taixu.core.model.workflow.WorkflowNodeType.TAIXU_BUILD,
+        top.wkbin.taixu.core.model.workflow.WorkflowNodeType.AGENT_INFERENCE,
+        top.wkbin.taixu.core.model.workflow.WorkflowNodeType.SUBAGENT_DELEGATE,
         top.wkbin.taixu.core.model.workflow.WorkflowNodeType.HOST_ACTION,
-    )) }) { "缺少沙盒执行租约，或包含尚未接入权限门禁的宿主节点" }
+        top.wkbin.taixu.core.model.workflow.WorkflowNodeType.PLUGIN_ACTION,
+    ) }) { "作用节点必须使用真实绑定执行租约" }
 }

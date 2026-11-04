@@ -5,6 +5,16 @@ import top.wkbin.taixu.harness.*
 
 /** Native operation journal, not model JSON or a session-name guess, determines the caller lane. */
 class ManagementActorGuard(private val operations: HarnessRuntimeRepository) {
+    /** 把本次原生调用身份绑定到协程上下文；下游只能用该身份，不能从 JSON 或会话名猜。
+     * 与 [rejection] 同源校验：只看原生 operation 流水，不接受模型提供的 session/operation。 */
+    suspend fun <T> withActor(session: String, operationId: String?, callId: String, block: suspend () -> T): T {
+        val operation = requireNotNull(operationId?.let { operations.findOperation(it) }) { "缺少可信原生 operation" }
+        val lane = requireNotNull(operations.findLane(operation.sessionId, operation.laneName)) { "缺少原生 lane" }
+        check(operation.sessionId == session && operation.laneName == "main" &&
+            lane.currentOperationId == operation.id) { "NATIVE_MANAGEMENT_ACTOR_REQUIRED" }
+        return kotlinx.coroutines.withContext(NativeManagementActor(session, operation.id, callId)) { block() }
+    }
+
     suspend fun rejection(call: ToolCall, session: String, operationId: String?, nativeLane: Boolean): ToolResult? {
         if (call.tool !in setOf(HarnessTool.TEAM, HarnessTool.APP_CONFIG)) return null
         val operation = operationId?.let { operations.findOperation(it) }

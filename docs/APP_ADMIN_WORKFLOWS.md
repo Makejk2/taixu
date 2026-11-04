@@ -1,6 +1,6 @@
 # app_admin / workflow 对话控制面
 
-## 边界与接入（已接入，集成验证见CI报告）
+## 边界与接入（实现已接线，本批未经集成验证）
 
 新实现位于 `harness/admin`，不替换工作流引擎、不读取密钥仓储，不暴露 `decide`。
 真实保存/删除复用 `WorkflowRepository`；运行/停止复用 `WorkflowRunManager`。
@@ -33,11 +33,11 @@ data class AppAdminNativeSourceState(
 
 `nativeSourceState` 必须来自原生服务，不得来自工具参数。每次提案、准备审批和批准回放均重新求值。
 指纹须覆盖有效模型档案/具体模型及默认回退、Provider 配置代次（不含凭据）、本地执行目标/发行版身份及权限。
-`supportsRun` 只在原生适配器确定当前目标可交给本地 WorkflowRunManager 且模型上下文受支持时设 true；
-未知、SSH/不支持目标、缺少有效模型 ID/variant 均 fail closed，默认回调不会伪造 run 支持。
+`supportsRun` 只在原生适配器确定当前目标可交给固定目标 WorkflowRunManager 且模型上下文受支持时设 true；
+未知/不支持目标、缺少有效模型 ID/variant 均 fail closed，默认回调不会伪造 run 支持。
 源会话仓库的 workspace/model/approvalMode/runMode/executionTargetJson 同时纳入来源 hash。
 推理/子智能体节点模型固定为来源有效模型；显式不同节点模型拒绝，不继承运行中切换的全局默认。
-原生 HostAction GUI 模型/运行时的后续变化仍由现有执行器负责；若装配方不能保证其来源一致，应返回 supportsRun=false。
+Host/GUI 通过来源 authority 原生逐节点批准及真实宿主权限检查；GUI 每轮固定来源模型并在配置变化时重新批准。
 
 必须以延迟 `runManager = { get<WorkflowRunManager>() }` 接入，不能在创建 ToolExecutor 时 eager resolve，
 避免 ToolExecutor → workflow → Harness 循环。
@@ -127,12 +127,55 @@ status 仅返回运行元数据，历史读取完全不解码 finalContextJson�
 ## 当前真实接入状态
 通过已有`app_config`的`module=workflow`路由，未增加独立工具枚举。默认关闭的超管开关、统一互斥执行边界及epoch失效仍覆盖此分支；所有写操作逐次原生批准。get/list/status脱敏。save/delete复用真实持久库，run/stop复用运行管理器。
 
-运行限制：Agent/subagent/GUI Agent、插件和展开节点拒绝；生产RunManager尚无全程绑定目标租约，因此沙盒命令/服务/构建/HostAction执行也明确拒绝，不能因快照检查冒充无TOCTOU。当前仅静态纯数据/条件/等待/人工审批/输出工作流能从此入口运行。保存定义不等于运行。停止同样需开启超管并原生批准；关闭开关不是取消全部运行，紧急停止仍可用原生工作流界面。
-
-原文所称“节点审批仍原生”指人工审批节点及引擎现有门禁，并不意味着每个Bash节点本来都有逐节点审批。本轮不提供decide/resume/retry工具，未开放凭据。
+运行门禁以以下精确矩阵为准。保存不等于运行，关闭超管不等于停止全部运行；紧急停止仍可用原生界面。本入口不提供 decide/resume/retry 或凭据接口。
 
 ## 并发一致性验证
-保存和删除已改为WorkflowDao同一Room写事务内按批准definitionHash比较并变更；并发原生编辑会使CAS拒绝，旧提案不重放。WorkflowDefinitionCasTest覆盖缺失创建、原生编辑、删除后复活、竞争提交以及历史级联语义；本地纯逻辑25项通过，真实Room及整包CI待核实。
+保存和删除已改为WorkflowDao同一Room写事务内按批准definitionHash比较并变更；并发原生编辑会使CAS拒绝，旧提案不重放。WorkflowDefinitionCasTest覆盖缺失创建、原生编辑、删除后复活、竞争提交以及历史级联语义；历史记录不作为本轮验证证据；真实 Room 及整包集中验证待办。
 
-## 固定目标租约与资源清理（本轮在建）
-本轮将Bash/Process/Build工作流绑定到批准的本地distribution、workspace与定义hash；整段工作流持有runtime维护阻挡pin，原会话停止不改变独立生命周期。环境关闭失败时保留资源owner及pin，status.cleanupPending=true，stop只重试清理不重跑业务，直到清理成功才解除维护保护。人工审批等待仍保持绑定。Agent/subagent/Host执行权限适配尚待后续，不提前声称支持。
+## 固定目标租约与已接能力（静态实现状态，未测试）
+
+旧 checkpoint 的 Agent/Host 一概拒绝已被真实 source 验证替代，不代表绕过安全核。
+`startBound` 要求来源主会话操作授权，持久 consume 在一次 INSERT 中绑定唯一 executionId；
+`WorkflowExecutionLeases.use` 在创建环境前核对该持久授权，恢复不能拿旧批准开新执行。
+每个节点经 lease.operation 核定义 hash、目标和 source；新图/动态扩图不能沿用旧授权。
+source 仅对新 admin 启动强制要求；无 source 旧日志仍不能运行 Agent/Host，不能自动补造来源。
+
+### Exact node matrix
+
+| 节点类型（枚举精确值） | admin 运行准入 | 运行时边界 |
+| --- | --- | --- |
+| TRIGGER | 支持 | 固定完整图 |
+| CONDITION_BRANCH | 支持 | 固定完整图 |
+| HUMAN_APPROVAL | 支持 | 原生 broker |
+| DELAY | 支持 | 节点执行预算 |
+| SET_VARIABLE | 支持 | 变量及敏感值检查 |
+| TERMINAL_OUTPUT | 支持 | 既有输出执行器；管理 status 不导出日志 |
+| BASH_COMMAND | 需 bound lease | 冻结环境、工作区、资源 owner |
+| PROCESS_SERVICE | 需 bound lease | 冻结环境及服务生命周期 |
+| TAIXU_BUILD | 需 bound lease | 固定环境与构建执行器 |
+| AGENT_INFERENCE | 需 bound lease + source | 来源模型/variant、每轮配置指纹及工具权限 |
+| SUBAGENT_DELEGATE | 需 bound lease + source | 派生 Lane 继承来源、目标、权限；真实工具审批 |
+| HOST_ACTION（含 gui_pilot） | 需 bound lease + source | 原生逐节点批准，真实 privilege 检查；GUI 每轮模型重核 |
+| PLUGIN_ACTION | 需 bound lease + source + 逐节点内容身份 | 安装包内容 hash 冻结进 binding.pluginStamps；批准后重取回调并核同 hash，变化即拒；未装内容身份的插件仍拒 |
+| 任意含 WorkflowExpansions.SOURCE_KEY 的节点 | 拒绝 | 必须重新批准完整新图，不沿用原授权 |
+
+无 bound lease 的 appAdminValidateNativeRun 继续拒绝命令、服务、构建、Agent、子智能体、Host 作用节点。
+普通原生 UI 无绑定旧路径不在本次扩大授权范围；绑定旧日志的无 source Agent/Host 继续拒绝。
+
+### 真实链与资源边界
+
+- 本地固定 distribution；远程使用 FrozenRemoteWorkflowEnvironment 的显式 SSH target/server snapshot、原生 server 配置/凭据租约和真实 connector，不读 active remote、不回退本地。目标不可用即拒绝。
+- 资源关闭失败保留 owner/pin，status.cleanupPending=true；stop 重试清理不重跑业务，成功释放后才解除维护/档案修改保护。
+- Scheduler 每节点装配 WorkflowLaneAuthority。Agent adapter 和派生会话核来源模型、workspace、target、approvalMode/runMode；不注入 FULL_ACCESS、不解析活动默认模型。
+- SubagentLaneRunner 保留 ToolExecutor 原权限策略：只对 approvalDeferred 的未执行调用等待原生批准；展示脱敏 actual-call 参数和摘要，批准只重放同一 immutable bounded call。拒绝不执行，不重放之前调用。
+- 模型配置变化通过 reviewModel 原生重批，每轮重取并核配置；GUI 同样固定来源模型。删除模型/变体不静默切默认。
+- WorkflowSourceAuthority 在发布审批前持久 REQUESTED，动作前持久 APPROVED/DENIED，取消尝试 UNKNOWN；写审计失败不能执行。审批记录不存明文提示词/凭据，不跨进程复用批准。
+- 审批等待使用独立 active-work 执行预算，状态真实投影 WAITING_APPROVAL；原生等待不冒充执行。恢复未知副作用仍依既有 Recovery 显式 retry，不能自动重放。
+
+### 未完成的底层缺口与集中验证待办
+
+插件 registry 不等于真实 executor；PLUGIN_ACTION 继续拒绝。动态扩图缺少 admin 完整新图重新提案/批准协议，继续拒绝。
+模型 secret bytes 的仅凭据轮换没有公共 revision，不能声称检测所有凭据变化；source 指纹只覆盖持久配置及引用。
+真实 Host 权限、GUI 无障碍/设备能力及 SSH 连接仍依赖设备环境，原生批准不替代权限或连通性。
+本轮只静态核对及改动，未运行测试、编译、CI、安装或真实模型。集中阶段须覆盖无 lease/source、授权重用、
+图/模型漂移、审批拒绝与审计写失败、SSH pin/清理失败、旧日志恢复及 GUI/Host 权限拒绝；不能把此矩阵当成 tested 结果。

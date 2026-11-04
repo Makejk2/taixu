@@ -474,6 +474,8 @@ val harnessModule = module {
             providerClient = get(),
             toolExecutor = { get<ToolExecutor>() },
             environments = get(),
+            nativeSessions = get(),
+            nativeModels = get(),
             treeStore = get(),
             operations = get(),
             settingsDataStore = get(),
@@ -507,6 +509,7 @@ val harnessModule = module {
             models = get(),
             laneRunner = get(),
             subagentOrchestrator = get(),
+            provider = { get() },
         )
     }
 
@@ -520,6 +523,7 @@ val harnessModule = module {
             privilegeManager = get(),
             providerClient = get(),
             hud = get(),
+            models = get(),
         )
     }
 
@@ -527,7 +531,7 @@ val harnessModule = module {
         WorkflowRunManager(
             scheduler = get(),
             repository = get(), linuxRuntime = get(),
-            executionLeases = top.wkbin.taixu.harness.workflow.createWorkflowExecutionLeases(get(org.koin.core.qualifier.named("local-execution")), get()),
+            executionLeases = top.wkbin.taixu.harness.workflow.createWorkflowExecutionLeases(get(org.koin.core.qualifier.named("local-execution")), get(), get(), top.wkbin.taixu.harness.workflow.FrozenRemoteWorkflowEnvironment(get(), get()), readReview = { id -> get<top.wkbin.taixu.core.database.WorkflowRepository>().nativeReview(id) }, plugins = get()),
             json = get(), logger = get(),
         )
     }

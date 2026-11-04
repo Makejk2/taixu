@@ -81,6 +81,15 @@ class ToolExecutor(
     private val environments: top.wkbin.taixu.harness.environment.SessionExecutionEnvironments? = null,
     private val appConfigBackend: top.wkbin.taixu.harness.config.AppConfigToolBackend? = null,
     private val managementActorGuard: top.wkbin.taixu.harness.admin.ManagementActorGuard? = null,
+    // backup 新增的原生管理子后端（用户规则/包/运行时/会话/模型表单），全部可空以保留旧装配；
+    // 主会话需在 DI 中按名补上这些构造参数（ToolBackendModule 已按名透传）。
+    private val userRuleGuard: top.wkbin.taixu.harness.rules.UserRuleToolGuard? = null,
+    private val packageAdmin: top.wkbin.taixu.harness.admin.packages.PackageAdminBackend? = null,
+    private val runtimeAdmin: top.wkbin.taixu.harness.admin.runtime.RuntimeAdminComponents? = null,
+    private val userRulesBackend: top.wkbin.taixu.harness.admin.rules.UserRulesBackend? = null,
+    private val sessionManagementBackend: top.wkbin.taixu.harness.admin.SessionManagementBackend? = null,
+    private val nativeModelForms: top.wkbin.taixu.harness.admin.model.ModelNativeFormBridge? = null,
+    private val modelAdminBackend: top.wkbin.taixu.harness.admin.model.ModelAdminBackend? = null,
     private val workflowAdminBackend: top.wkbin.taixu.harness.admin.AppAdminBackend? = null,
     private val teamBackend: top.wkbin.taixu.harness.team.TeamToolBackend? = null,
     private val appModulesBackend: (suspend (String) -> top.wkbin.taixu.harness.directory.AppModulesToolBackend)? = null,
@@ -126,7 +135,6 @@ class ToolExecutor(
     ): ToolResult = if (environments != null) environments.activity(sessionId, workspace, resourceOwner) {
         executeBound(toolCall, sessionId, workspace, bypassApproval, allowApprovalRequest, progressReporter, operationId)
     } else executeBound(toolCall, sessionId, workspace, bypassApproval, allowApprovalRequest, progressReporter, operationId)
-
     private suspend fun executeBound(toolCall: ToolCall, sessionId: String, workspace: String, bypassApproval: Boolean,
         allowApprovalRequest: Boolean, progressReporter: (suspend (String) -> Unit)?, operationId: String?): ToolResult {
         governanceGuard?.blockReason(sessionId, toolCall)?.let { reason ->
@@ -137,7 +145,6 @@ class ToolExecutor(
         }
         return (if (bypassApproval) ScriptCapabilityDispatcher.replayResult(toolCall, result) else result).withRecoveryAdvice(toolCall.tool)
     }
-
     private suspend fun executeWithPolicy(
         toolCall: ToolCall,
         sessionId: String = "",
@@ -148,13 +155,22 @@ class ToolExecutor(
     ): ToolResult {
         val now = System.currentTimeMillis()
         managementActorGuard?.rejection(toolCall, sessionId, operationId, allowApprovalRequest)?.let { return it }
+        // 用户规则门禁：先于任何普通工具副作用执行（含原生审批回放）。
+        userRuleGuard?.check(toolCall, sessionId, workspace, operationId, bypassApproval) { decision ->
+            requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now)
+        }?.let { return it }
         if (toolCall.tool == HarnessTool.APP_CONFIG && toolCall.args["action"]?.jsonPrimitive?.content in setOf("modules", "inspect_module"))
             return top.wkbin.taixu.harness.directory.executeAppModules(sessionId, toolCall, now,
                 { sessionDao?.findById(it) != null }, appModulesBackend)
-        if (toolCall.tool in setOf(HarnessTool.TEAM, HarnessTool.APP_CONFIG)) return aiAdminBoundary { snapshot ->
+        if (toolCall.tool in setOf(HarnessTool.TEAM, HarnessTool.APP_CONFIG)) return requireNotNull(managementActorGuard).withActor(sessionId,operationId,toolCall.id) { aiAdminBoundary { snapshot ->
             val enabled = aiAdminEpochGate.check(snapshot) {
                 teamBackend?.disableManagement(); appConfigBackend?.disableManagement(); workflowAdminBackend?.disableManagement()
+                modelAdminBackend?.disableManagement(); sessionManagementBackend?.disableManagement(); userRulesBackend?.disableManagement()
+                runtimeAdmin?.disableManagement(); packageAdmin?.disableManagement()
             }
+            packageAdmin?.setManagementEnabled(enabled)
+            runtimeAdmin?.setManagementSnapshot(snapshot)
+            userRulesBackend?.setManagementEnabled(enabled)
             if (!enabled && top.wkbin.taixu.harness.team.aiAdminRequiresEnabled(HarnessApiMapper.apiName(toolCall.tool), toolCall.args)) {
                 val reason = "AI 超管未开启；请由用户在设置 → Agent 执行与上下文手动开启。AI 不可自行开启。"
                 if (toolCall.tool == HarnessTool.TEAM) teamBackend?.audit(sessionId, "admin_disabled", reason)
@@ -168,10 +184,10 @@ class ToolExecutor(
             } else {
                 top.wkbin.taixu.harness.admin.routeAdminConfiguration(appConfigBackend, workflowAdminBackend, approvalPolicyEngine,
                     { id -> sessionDao?.findById(id)?.let { row -> row.runMode?.let(RunMode::fromId) ?: approvalRepository?.currentRunMode() ?: RunMode.PLAN } },
-                    toolCall, sessionId, bypassApproval, now,
+                    toolCall, sessionId, bypassApproval, now, modelAdminBackend, operationId, sessionManagementBackend, userRulesBackend, runtimeAdmin, packageAdmin, nativeModelForms,
                 ) { decision -> requestApproval(toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now) }
             }
-        }
+        } }
         // ask_user 是向用户提问的动作本身，不走审批门控（策略引擎对它亦豁免）：
         // 委托 AskUserToolBackend 走提问生命周期——落一条 pending 请求（复用审批请求的
         // 暂停/恢复管道）并返回 awaitingApproval 让整轮暂停；UI 渲染问题卡，答案由
@@ -270,7 +286,6 @@ class ToolExecutor(
             imageDataUrl = imagePayload,
         )
     }
-
     private suspend fun requestApproval(
         toolCall: ToolCall, sessionId: String, workspace: String, decision: ApprovalDecision,
         operationId: String?, allowApprovalRequest: Boolean, now: Long,
@@ -278,7 +293,6 @@ class ToolExecutor(
         approvalRepository, approvalPolicyEngine, approvalAuditor, eventBus,
         toolCall, sessionId, workspace, decision, operationId, allowApprovalRequest, now,
     )
-
     /** Clear process-local grants when the native session is deleted. */
     suspend fun revokeAppConfigSession(sessionId: String) {
         appConfigBackend?.execute(sessionId, kotlinx.serialization.json.buildJsonObject {

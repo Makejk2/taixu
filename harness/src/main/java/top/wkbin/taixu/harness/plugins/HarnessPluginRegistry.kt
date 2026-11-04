@@ -59,6 +59,16 @@ class HarnessPluginRegistry(plugins: List<HarnessPlugin>, private val external: 
             ?.associate { it.id to it.schema }.orEmpty()
     fun handles(server: String) = server.startsWith("plugin.")
     fun node(pluginId: String, extension: String): PluginWorkflowNode? = entries.singleOrNull { it.descriptor.id == pluginId || it.packageId == pluginId }?.nodes?.singleOrNull { it.id == extension }
+    /** Only contributions with explicit installed content identity get durable workflow admission.
+     * Built-in callbacks without such identity still require their native per-call entry path. */
+    fun nodeIdentity(pluginId: String, extension: String): String? {
+        val plugin=entries.singleOrNull { it.descriptor.id==pluginId || it.packageId==pluginId } ?: return null
+        val node=plugin.nodes.singleOrNull { it.id==extension } ?: return null
+        val origin=plugin.originFingerprint ?: return null
+        val text=listOf(plugin.descriptor.id,plugin.descriptor.version,origin,node.id,node.schema.toString()).joinToString("\u0000")
+        return java.security.MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
+    }
     fun summaries(): String = entries.filter { it.tools.isNotEmpty() }.joinToString("\n") { "- plugin.${it.descriptor.id} · ${it.tools.size} 个插件工具" }
     fun inspect(server: String): Pair<Boolean, String> {
         val plugin = owner(server) ?: return false to "插件能力域不存在"

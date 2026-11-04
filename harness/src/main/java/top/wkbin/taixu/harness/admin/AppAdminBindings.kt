@@ -25,14 +25,21 @@ fun createBoundAppAdminBackend(
     runManager: () -> WorkflowRunManager,
     provider: () -> ProviderClient,
     runtime: LinuxRuntime,
+    runtimeRepository: HarnessRuntimeRepository? = null,
+    models: AiModelRepository? = null,
+    remoteServers: top.wkbin.taixu.core.datastore.RemoteServerRepository? = null,
+    plugins: (() -> top.wkbin.taixu.harness.plugins.HarnessPluginRegistry)? = null,
 ): AppAdminBackend = createAppAdminBackend(
     workflows, sessions, bots, assignments, audit, runManager,
+    plugins = plugins,
     nativeSourceState = { sessionId ->
+        val caller = requireNotNull(kotlinx.coroutines.currentCoroutineContext()[NativeManagementActor]) { "缺少本次可信原生调用身份" }
+        require(caller.sessionId==sessionId)
         val session = requireNotNull(sessions.findById(sessionId)) { "原生会话不存在" }
         val distribution = runtime.activeDistroId.value
         val ready = runtime.state.value is RuntimeState.Ready
         val model = try {
-            provider().resolveConfigured(session.modelId, session.modelVariant)
+            provider().resolveSavedModelProfile(requireNotNull(session.modelId), requireNotNull(session.modelVariant))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -45,12 +52,43 @@ fun createBoundAppAdminBackend(
                 it.provider.isNotBlank() && it.model.isNotBlank() &&
                 it.model.equals(session.modelVariant, ignoreCase = true)
         }
-        appAdminBoundNativeSource(
+        val lane = runtimeRepository?.findLane(sessionId, "main")
+        val savedModel = identity?.let { models?.findById(requireNotNull(session.modelId)) }
+        val operationId = caller.operationId
+        val actualOperation = runtimeRepository?.findOperation(operationId)
+        require(lane?.currentOperationId==operationId && actualOperation?.sessionId==sessionId && actualOperation.laneName=="main") {
+            "本次调用并非当前原生主操作"
+        }
+        val source = if (savedModel != null && !operationId.isNullOrBlank() && !session.executionTargetJson.isNullOrBlank()) {
+            top.wkbin.taixu.harness.workflow.WorkflowExecutionSource(
+                sourceSessionId = sessionId, sourceOperationId = operationId,
+                modelBinding = top.wkbin.taixu.harness.workflow.WorkflowModelBinding(
+                    savedModel.id, requireNotNull(session.modelVariant),
+                    top.wkbin.taixu.harness.workflow.WorkflowModelBinding.fingerprint(savedModel)),
+                targetJson = requireNotNull(session.executionTargetJson), workspace = session.workspace,
+                approvalMode = session.approvalMode, runMode = session.runMode,
+                definitionHash = "", authorizationId = adminHash("$sessionId:$operationId"),
+            )
+        } else null
+        require(runtimeRepository?.findLane(sessionId, "main") == lane && sessions.findById(sessionId) == session) {
+            "原生操作来源解析期间已变化"
+        }
+        val target = runCatching { Json.decodeFromString<top.wkbin.taixu.core.model.SessionExecutionTarget>(
+            requireNotNull(session.executionTargetJson)).also { it.validate() } }.getOrNull()
+        val remoteReady = target?.remote?.let { expected ->
+            remoteServers?.servers?.value?.singleOrNull { it.id == expected.id } == expected
+        } == true
+        val bound = appAdminBoundNativeSource(
             session.workspace, session.executionTargetJson, distribution, ready,
             model?.let(::appAdminModelFingerprint) ?: adminHash("unresolved-model"),
             if (identity != null) session.modelId else null,
             identity?.model,
         )
+        val candidate = if (target?.remote != null) bound.copy(
+            supportsRun = remoteReady && identity != null, localDistributionId = null,
+            environmentFingerprint = adminHash(requireNotNull(session.executionTargetJson))) else bound
+        candidate.copy(supportsRun = source != null && appAdminLocalRunSupported(session.workspace,session.executionTargetJson,candidate),
+            executionSource = source)
     },
 )
 

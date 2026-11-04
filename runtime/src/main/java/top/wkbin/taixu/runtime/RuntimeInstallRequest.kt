@@ -3,6 +3,8 @@ package top.wkbin.taixu.runtime
 data class RuntimeInstallRequest(
     val distributionId: String,
     val registryRoute: RegistryRoute = RegistryRoute.AUTO,
+    /** Native-reviewed platform manifest digest; null retains legacy interactive install. */
+    val approvedManifestDigest: String? = null,
 )
 
 data class RootfsUpdateInfo(

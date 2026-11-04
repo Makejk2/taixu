@@ -74,12 +74,22 @@ internal class AppAdminService(
         }
     }
 
+    // Persistent configuration is frozen across proposal/apply rounds; each round's actual
+    // main operation is authenticated independently and must not masquerade as config drift.
+    private fun sameSource(a: AppAdminSource,b: AppAdminSource): Boolean {
+        fun stable(value: AppAdminSource): AppAdminSource {
+            val binding=value.executionBinding ?: return value
+            val source=binding.source ?: return value
+            return value.copy(executionBinding=binding.copy(source=source.copy(sourceOperationId="",authorizationId="")))
+        }
+        return stable(a)==stable(b)
+    }
     private suspend fun source(session: String): AppAdminSource {
         require(session.isNotBlank()) { "必须绑定原生会话" }
         return try {
             port.source(session).also { current ->
                 require(current.fingerprint.isNotBlank()) { "无法核验原生来源" }
-                proposals.values.filter { it.session == session && it.source != current }.forEach {
+                proposals.values.filter { it.session == session && !sameSource(it.source,current) }.forEach {
                     it.consumed = true; it.pendingCall = null
                 }
             }
@@ -101,7 +111,7 @@ internal class AppAdminService(
     private suspend fun refresh(p: Proposal) {
         try {
             val current = source(p.session)
-            require(!p.consumed && current.build && current == p.source) { "来源工作区、模型、环境或权限已变化" }
+            require(!p.consumed && current.build && sameSource(current,p.source)) { "来源工作区、模型、环境或权限已变化" }
             require(snapshot(p.operation) == p.before) { "工作流定义或运行快照已变化" }
             validate(p.operation, current)
         } catch (e: Exception) {
@@ -158,7 +168,10 @@ internal class AppAdminService(
                     "已删除自定义工作流；现有仓库按外键级联删除该定义的历史，不会声称保留历史"
                 }
                 "run" -> {
-                    val started = port.startBound(requireNotNull(p.definition), p.variables, p.source)
+                    val currentSource=port.source(session)
+                    require(sameSource(currentSource,p.source))
+                    val binding=currentSource.executionBinding?.let { frozen -> frozen.copy(source=frozen.source?.copy(authorizationId=p.id)) }
+                    val started = port.startBound(requireNotNull(p.definition), p.variables, currentSource.copy(executionBinding=binding))
                     buildJsonObject {
                         put("executionId", started.executionId); put("accepted", started.accepted)
                         put("note", if (started.accepted) "原生受理，非完成；请 status 查询，节点审批仍走原生 UI" else "原生拒绝启动；可能已记录 FAILED 历史，请 status 核对")

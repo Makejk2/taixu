@@ -7,6 +7,11 @@ import top.wkbin.taixu.core.common.logging.AppLogger
 import top.wkbin.taixu.core.model.AgentSubagent
 import top.wkbin.taixu.core.model.AgentSubagentIndexEntry
 import top.wkbin.taixu.core.model.SubagentTaskSpec
+import top.wkbin.taixu.harness.workflow.WorkflowWorkToken
+import top.wkbin.taixu.harness.workflow.WorkflowExecutionBudgetExceeded
+import top.wkbin.taixu.harness.workflow.withWorkflowExecutionBudget
+import top.wkbin.taixu.harness.workflow.withWorkflowWorkToken
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -130,13 +135,17 @@ class SubagentOrchestrator(
                 "start=${waveIndex + 1}/${waves.size}, tasks=${wave.joinToString { it.taskName }}; " +
                     "lease wave=${waveLeaseDescription(wave)}; tasks in this wave may run concurrently, later waves wait",
             )
-            val waveResults = wave.map { spec ->
+            val parentWork = currentCoroutineContext()[WorkflowWorkToken]
+            parentWork?.pause()
+            val waveResults = try { wave.map { spec ->
                 async {
                     globalParallelism.withPermit {
-                        runSubagentSafely(spec, parentSessionId, parentLeaf, workspace, modelId, modelVariant, profileIndex)
+                        withWorkflowWorkToken {
+                            runSubagentSafely(spec, parentSessionId, parentLeaf, workspace, modelId, modelVariant, profileIndex)
+                        }
                     }
                 }
-            }.awaitAll()
+            }.awaitAll() } finally { parentWork?.resume() }
             results += waveResults
             logger.logAgent(
                 parentSessionId,
@@ -276,7 +285,13 @@ class SubagentOrchestrator(
             )
         }
         val targetModel = runCatching {
-            when (val route = selectSubagentModel(spec.model, profile.defaultModelId, profile.defaultModelVariant)) {
+            val workflow = kotlinx.coroutines.currentCoroutineContext()[top.wkbin.taixu.harness.subagent.WorkflowLaneAuthority]
+            if (workflow != null) {
+                // Workflow child roles inherit the approved source, never their role's default
+                // provider or a model string injected by generated delegation arguments.
+                providerClient.resolveSavedModelProfile(workflow.source.modelBinding.modelId,
+                    workflow.source.modelBinding.variant)
+            } else when (val route = selectSubagentModel(spec.model, profile.defaultModelId, profile.defaultModelVariant)) {
                 SubagentModelRoute.Inherit -> providerClient.resolveRequestedModel(null, modelId, modelVariant)
                 is SubagentModelRoute.Requested -> providerClient.resolveRequestedModel(route.selection, modelId, modelVariant)
                 is SubagentModelRoute.RoleDefault -> providerClient.resolveSavedModelProfile(route.profileId, route.variant)
@@ -308,7 +323,7 @@ class SubagentOrchestrator(
             )
         }
         val laneResult = try {
-            withTimeoutOrNull(SUBAGENT_TIMEOUT_MS) {
+            val runLane = suspend {
                 laneRunner.run(
                     parentSessionId,
                     laneName,
@@ -317,6 +332,12 @@ class SubagentOrchestrator(
                     modelConfig = targetModel,
                     writePaths = spec.writePaths,
                 )
+            }
+            if (currentCoroutineContext()[WorkflowWorkToken] == null) {
+                withTimeoutOrNull(SUBAGENT_TIMEOUT_MS) { runLane() }
+            } else {
+                try { withWorkflowExecutionBudget(SUBAGENT_TIMEOUT_MS) { runLane() } }
+                catch (_: WorkflowExecutionBudgetExceeded) { null }
             }
         } finally {
             laneLock.unlock()

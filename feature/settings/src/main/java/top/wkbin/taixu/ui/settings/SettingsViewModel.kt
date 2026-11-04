@@ -1570,7 +1570,7 @@ class SettingsViewModel(
         return true
     }
 
-    fun saveModels(
+    suspend fun saveModels(
         id: String? = null,
         models: List<String>,
         name: String = "",
@@ -1603,7 +1603,8 @@ class SettingsViewModel(
             return false
         }
         _profileSaveError.value = null
-        viewModelScope.launch {
+        return try {
+            withContext(Dispatchers.IO) {
             val cleanModels = models.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
             val profileName = name.trim().ifBlank {
                 if (cleanModels.size == 1) cleanModels.first() else provider.trim()
@@ -1635,8 +1636,14 @@ class SettingsViewModel(
                     promptCacheTtl1h = promptCacheTtl1h,
                 ),
             )
+            }
+            true
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            _profileSaveError.value = "保存未确认完成，请核对模型档案；不要直接重复提交。"
+            false
         }
-        return true
     }
 
     suspend fun readModelApiKey(secretRef: String): String {
@@ -1655,6 +1662,10 @@ class SettingsViewModel(
             profileWriter.deleteProfile(id)
         }
     }
+    suspend fun deleteModelFromNative(id: String) {
+        withContext(Dispatchers.IO) { profileWriter.deleteProfile(id) }
+    }
+
 
     // ---- 宿主与沙箱存储挂载配置 (PRoot -b) ----
     val mountDownloadEnabled: StateFlow<Boolean> = runtimePreferences.mountDownloadEnabled

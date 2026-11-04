@@ -55,6 +55,8 @@ class SubagentLaneRunner(
     private val json: Json,
     private val toolRoundDispatcher: ToolRoundDispatcher,
     private val environments: top.wkbin.taixu.harness.environment.SessionExecutionEnvironments? = null,
+    private val nativeSessions: top.wkbin.taixu.core.database.HarnessSessionRepository? = null,
+    private val nativeModels: top.wkbin.taixu.core.database.AiModelRepository? = null,
 ) {
     suspend fun run(
         sessionId: String,
@@ -80,14 +82,28 @@ class SubagentLaneRunner(
         val toolRoundRunner = SubagentToolRoundRunner(operations, json, toolRoundDispatcher) { call, session, cwd, operation ->
             // 子任务总预算 15 分钟，base 的 10 分钟默认超时会让一条挂住的命令静默吃满预算；
             // 未显式声明 timeout_seconds 时压到 SUBAGENT_COMMAND_TIMEOUT_CAP_SECONDS。
-            toolExecutor().execute(
-                call.withSubagentCommandTimeoutCap(),
-                session,
-                cwd,
-                allowApprovalRequest = false,
-                operationId = operation,
-                resourceOwner = operation,
-            )
+            val executor = toolExecutor()
+            val bounded = call.withSubagentCommandTimeoutCap()
+            val initial = executor.execute(bounded, session, cwd, allowApprovalRequest = false,
+                operationId = operation, resourceOwner = operation)
+            val authority = kotlinx.coroutines.currentCoroutineContext()[WorkflowLaneAuthority]
+            if (!initial.approvalDeferred || authority == null) initial else {
+                // Only a workflow-owned session with identical frozen authority may ask the
+                // workflow broker. A child sharing a user session can never borrow this grant.
+                val source = authority.source
+                val row = nativeSessions?.findById(session)
+                check(session.startsWith("workflow:${authority.executionId}:${authority.nodeId}") && row != null)
+                check(row.workspace == source.workspace && row.executionTargetJson == source.targetJson &&
+                    row.modelId == source.modelBinding.modelId && row.modelVariant == source.modelBinding.variant &&
+                    row.approvalMode == source.approvalMode && row.runMode == source.runMode)
+                val allowed = authority.approve(call.id,
+                    call.rawToolName ?: top.wkbin.taixu.harness.HarnessApiMapper.apiName(call.tool),
+                    workflowToolPreview(bounded,cwd))
+                if (!allowed) initial.copy(approvalDeferred = false, success = false,
+                    output = "用户未批准此工作流工具；未执行。", errorCode = "WORKFLOW_TOOL_DENIED")
+                else executor.execute(bounded, session, cwd, bypassApproval = true,
+                    allowApprovalRequest = false, operationId = operation, resourceOwner = operation)
+            }
         }
         var finalText = ""
         // 需要审批而被跳过的调用、被写租约拦截的写入：两者都会让"看起来收场了"实际没做完，
@@ -99,7 +115,24 @@ class SubagentLaneRunner(
         // 只读审计任务（"检查为什么 X 服务写入失败"的合法结论里也有这些词）。
         val failedWrites = toolRoundRunner.failedWrites
         return try {
-            val configuredModel = modelConfig ?: providerClient.resolveConfigured(modelId, modelVariant)
+            val workflowAuthority = kotlinx.coroutines.currentCoroutineContext()[WorkflowLaneAuthority]
+            var observedFingerprint: String? = null
+            suspend fun resolveWorkflowModel(): ModelConfig {
+                val authority = requireNotNull(workflowAuthority)
+                val binding = authority.source.modelBinding
+                val repository = requireNotNull(nativeModels) { "缺少可信模型仓库" }
+                val row = requireNotNull(repository.findById(binding.modelId)) { "来源模型已删除，未调用其他档案" }
+                val fingerprint = top.wkbin.taixu.harness.workflow.WorkflowModelBinding.fingerprint(row)
+                require(binding.variant in row.model.split(',').map(String::trim)) { "来源变体已删除，请重新批准选择" }
+                if (fingerprint != binding.fingerprint && observedFingerprint != fingerprint)
+                    check(authority.reviewModel(fingerprint,binding.variant)) { "用户未批准改变的来源模型" }
+                val resolved = providerClient.resolveSavedModelProfile(binding.modelId,binding.variant)
+                check(repository.findById(binding.modelId) == row) { "模型解析期间再次变化，未调用" }
+                observedFingerprint = fingerprint
+                return resolved
+            }
+            var configuredModel = if (workflowAuthority == null) modelConfig ?: providerClient.resolveConfigured(modelId, modelVariant)
+                else resolveWorkflowModel()
             // 子智能体是定向小任务，不能沿用主会话数百轮上限，否则只读审计会漫游到超时。
             val toolRounds = runCatching { settingsDataStore.maxToolRounds.first() }
                 .getOrDefault(DEFAULT_MAX_ROUNDS)
@@ -109,6 +142,7 @@ class SubagentLaneRunner(
             val totalRounds = toolRounds + 1
             val historyBudgetTokens = laneHistoryBudget(configuredModel)
             repeat(totalRounds) { round ->
+                if (workflowAuthority != null) configuredModel = resolveWorkflowModel()
                 val forceFinalAnswer = shouldForceSubagentFinalAnswer(round, totalRounds)
                 val model = if (forceFinalAnswer) configuredModel.copy(pureChatMode = true) else configuredModel
                 val responseId = UUID.randomUUID().toString()
@@ -205,6 +239,12 @@ class SubagentLaneRunner(
                     model = model, operationId = operationId, round = round,
                     reasoning = result.reasoningContent, writePaths = writePaths,
                 )
+                if (toolRoundRunner.policyPaused) {
+                    operations.suspendOperation(operationId,"USER_RULE_PAUSED：未执行的工具须重核规则，不能自动重放")
+                    return SubagentLaneResult(false,
+                        "原Lane已按用户规则挂起，消息和任务保留；调整规则或预算后继续，不把暂停视作完成。",
+                        toolRoundRunner.toolCallCount,termination=SubagentTermination.POLICY_PAUSED)
+                }
             }
             finalizer.finish(sessionId, "failed", details = "max rounds", laneName = laneName)
             SubagentLaneResult(

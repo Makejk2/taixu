@@ -164,13 +164,15 @@ internal class ProviderModelResolver(
     /** Room 实体 → 运行配置：推理参数原样透传，协议按 Base URL / 厂商名自动推断。 */
     private suspend fun AiModelEntity.toModelConfig(
         providerRepository: ProviderRepository,
-    ): ModelConfig {
+    ): ModelConfig = top.wkbin.taixu.core.tools.ModelCredentialLifetime.serialized {
+        check(modelDao.findById(id) == this@toModelConfig) { "模型档案已变化，请重新解析；不会使用旧凭据或切换来源" }
         val baseUrl = this.baseUrl.ifBlank { DEFAULT_BASE_URL }
         val resolvedProtocol = inferProtocol(baseUrl, provider)
         val modelKeys = providerRepository.readModelApiKeys(secretRef)
-        val fallbackKey = if (provider.startsWith("plugin.")) null else providerRepository.readApiKey().orEmpty().ifBlank { null }
+        val fallbackKey = if (provider.startsWith("plugin.") || secretRef.isNotBlank()) null
+            else providerRepository.readApiKey().orEmpty().ifBlank { null }
         val effectiveKeys = modelKeys.ifEmpty { listOfNotNull(fallbackKey) }
-        return ModelConfig(
+        ModelConfig(
             name = name,
             provider = provider,
             model = model.split(",").firstOrNull()?.trim().takeUnless { it.isNullOrBlank() } ?: model.trim(),

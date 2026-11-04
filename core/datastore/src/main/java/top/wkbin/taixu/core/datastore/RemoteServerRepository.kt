@@ -22,6 +22,7 @@ interface RemoteServerRepository {
     suspend fun credentials(id: String): SshCredentials
     suspend fun connection(id: String): Pair<RemoteServer, SshCredentials> =
         checkNotNull(servers.value.singleOrNull { it.id == id }) { "服务器配置已移除" } to credentials(id)
+    suspend fun acquireExecutionLease(expected: RemoteServer): AutoCloseable = error("REMOTE_TARGET_LEASE_UNAVAILABLE")
     suspend fun save(server: RemoteServer, credentials: SshCredentials)
     suspend fun select(id: String?)
     suspend fun remove(id: String)
@@ -34,6 +35,18 @@ class EncryptedRemoteServerRepository internal constructor(private val file: Ato
     @Serializable private data class Entry(val server: RemoteServer, val credentials: SshCredentials)
     @Serializable private data class Snapshot(val entries: List<Entry> = emptyList(), val active: String? = null)
     private val mutex = Mutex()
+    private val leaseMonitor = Any()
+    private val executionLeases = mutableMapOf<String,Int>()
+    override suspend fun acquireExecutionLease(expected: RemoteServer): AutoCloseable = mutex.withLock {
+        check(snapshot.entries.singleOrNull { it.server.id==expected.id }?.server == expected) { "远程目标已变化" }
+        synchronized(leaseMonitor) { executionLeases[expected.id]=(executionLeases[expected.id]?:0)+1 }
+        val released=java.util.concurrent.atomic.AtomicBoolean(false)
+        AutoCloseable { if(released.compareAndSet(false,true)) synchronized(leaseMonitor) {
+            val count=requireNotNull(executionLeases[expected.id]);check(count>0)
+            if(count==1) executionLeases.remove(expected.id) else executionLeases[expected.id]=count-1
+        } }
+    }
+
     private val json = Json
     private val loaded = if (file.baseFile.exists() || File(file.baseFile.path + ".bak").exists()) loadRemoteArchive(
         read = { file.openRead().use { require(it.available() <= 2 * 1024 * 1024); String(it.readBytes(), Charsets.UTF_8) } },
@@ -79,6 +92,17 @@ class EncryptedRemoteServerRepository internal constructor(private val file: Ato
                 if (file.baseFile.exists()) file.baseFile.copyTo(File(file.baseFile.path + ".unreadable-${System.nanoTime()}"))
             }
             val next = snapshot.update()
+            synchronized(leaseMonitor) {
+                executionLeases.filterValues { it>0 }.keys.forEach { id ->
+                    val before=snapshot.entries.singleOrNull { it.server.id==id }
+                    val after=next.entries.singleOrNull { it.server.id==id }
+                    check(before!=null && after!=null && before.server==after.server &&
+                        before.credentials.secret==after.credentials.secret &&
+                        before.credentials.passphrase==after.credentials.passphrase) {
+                        "远程目标仍被执行任务持有，不能更改连接档案或凭据；先停止并完成清理"
+                    }
+                }
+            }
             val bytes = encrypt(json.encodeToString(Snapshot.serializer(), next)).toByteArray(Charsets.UTF_8)
             require(bytes.size <= 2 * 1024 * 1024) { "连接存档超过大小上限" }
             val stream = file.startWrite()

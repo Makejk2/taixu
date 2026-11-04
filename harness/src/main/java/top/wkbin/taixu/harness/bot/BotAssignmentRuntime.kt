@@ -281,6 +281,17 @@ class BotAssignmentRuntime(
                 control.sessionRunStates.first { it[sessionId] !in BUSY_STATES }
             }
             val state = control.sessionRunStates.value[sessionId]
+            val linked = repository.getRequest(request.id)?.nativeTaskId?.let { nativeTasks?.find(it) }
+            val suspendedOperation = linked?.operationId?.let { runtimeRepository?.findOperation(it) }
+            val policyPaused = linked?.status == top.wkbin.taixu.core.database.task.AgentTaskStatus.SUSPENDED &&
+                suspendedOperation?.sessionId == sessionId && suspendedOperation.status == "suspended" &&
+                suspendedOperation.stateJson.contains("USER_RULE_PAUSED")
+            if (policyPaused) {
+                val reason = "USER_RULE_PAUSED：原生任务已挂起，未执行受限工具；调整规则后在原任务继续，不自动重放。"
+                repository.reportBlock(sessionId,reason,repository.getRequest(request.id)?.artifacts.orEmpty())
+                repository.finishRequest(request.id,false,false,reason,reason)
+                return
+            }
             result.blockedReason?.let { reason ->
                 repository.reportBlock(sessionId, reason, repository.getRequest(request.id)?.artifacts.orEmpty())
             }

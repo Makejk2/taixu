@@ -101,6 +101,21 @@ data class WorkflowScheduleEntity(
 
 @Dao
 interface WorkflowDao {
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertNativeReview(row: WorkflowNativeReviewEvent)
+    @Query("SELECT * FROM workflow_native_reviews WHERE reviewId=:id")
+    suspend fun nativeReview(id: String): WorkflowNativeReviewEvent?
+    @Query("UPDATE workflow_native_reviews SET state=:state,updatedAt=:now WHERE reviewId=:id AND state='REQUESTED'")
+    suspend fun finishNativeReview(id: String,state: String,now: Long): Int
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun consumeSourceAuthorization(row: WorkflowSourceAuthorization): Long
+    @Query("UPDATE workflow_source_authorizations SET executionId=:execution WHERE authorizationId=:id AND (executionId IS NULL OR executionId=:execution)")
+    suspend fun bindSourceExecution(id: String, execution: String): Int
+    @Query("SELECT * FROM workflow_source_authorizations WHERE authorizationId=:id")
+    suspend fun sourceAuthorization(id: String): WorkflowSourceAuthorization?
+
+
     @Query("SELECT * FROM workflows ORDER BY isBuiltin DESC, updatedAt DESC")
     fun observeAll(): Flow<List<WorkflowEntity>>
 
@@ -209,6 +224,14 @@ class RoomWorkflowScheduleStore(
 }
 
 interface WorkflowRepository {
+    suspend fun insertNativeReview(row: WorkflowNativeReviewEvent) { error("NATIVE_REVIEW_JOURNAL_UNAVAILABLE") }
+    suspend fun nativeReview(id: String): WorkflowNativeReviewEvent? = error("NATIVE_REVIEW_LOOKUP_UNAVAILABLE")
+    suspend fun finishNativeReview(id: String,state: String) { error("NATIVE_REVIEW_JOURNAL_UNAVAILABLE") }
+
+    suspend fun consumeSourceAuthorization(row: WorkflowSourceAuthorization): Boolean = false
+    suspend fun sourceAuthorization(id: String): WorkflowSourceAuthorization? = null
+    suspend fun bindSourceExecution(id: String, execution: String): Boolean = false
+
     fun observeDefinitions(): Flow<List<WorkflowDefinition>>
     fun observeRecentExecutions(limit: Int = 5): Flow<List<WorkflowExecutionLogEntity>>
     fun observeHistory(): Flow<List<WorkflowRuntimeState>> = observeRecentExecutions().map { logs ->
@@ -236,6 +259,16 @@ class RoomWorkflowRepository(
     private val dao: WorkflowDao,
     private val json: Json,
 ) : WorkflowRepository {
+    override suspend fun consumeSourceAuthorization(row: WorkflowSourceAuthorization) = dao.consumeSourceAuthorization(row) != -1L
+    override suspend fun insertNativeReview(row: WorkflowNativeReviewEvent) = dao.insertNativeReview(row)
+    override suspend fun nativeReview(id: String) = dao.nativeReview(id)
+    override suspend fun finishNativeReview(id: String,state: String) {
+        require(state in setOf("APPROVED","DENIED","UNKNOWN"))
+        check(dao.finishNativeReview(id,state,System.currentTimeMillis()) == 1) { "NATIVE_REVIEW_ALREADY_SETTLED" }
+    }
+    override suspend fun sourceAuthorization(id: String) = dao.sourceAuthorization(id)
+    override suspend fun bindSourceExecution(id: String, execution: String) = dao.bindSourceExecution(id,execution) == 1
+
     override fun observeDefinitions(): Flow<List<WorkflowDefinition>> = dao.observeAll().map { entities ->
         entities.mapNotNull(::decode)
     }

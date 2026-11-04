@@ -33,6 +33,9 @@ internal class SubagentToolRoundRunner(
     val failedWrites = linkedMapOf<String, String>()
     private val loopDetector = ToolCallLoopDetector()
 
+    var policyPaused: Boolean = false
+        private set
+
     suspend fun execute(
         specs: List<ApiToolCallSpec>,
         sessionId: String,
@@ -44,6 +47,7 @@ internal class SubagentToolRoundRunner(
         writePaths: List<String>?,
     ) {
         for (spec in specs) {
+            if (policyPaused) break
             toolCallCount++
             val callId = ToolCallIdNormalizer.normalize(spec.id)
             val rawName = spec.name.trim()
@@ -97,6 +101,7 @@ internal class SubagentToolRoundRunner(
                     "工具执行异常：${throwable.message?.take(200) ?: throwable::class.simpleName}") },
                 commitResult = { outcome ->
                     operations.toolSettled(operationId, outcome, round, toolName = rawName)
+                    if (outcome.policyPaused) policyPaused = true
                     loopDetector.recordSettled(rawName, args, outcome.success, output = outcome.output)
                     if (writeRejection != null) blockedWrites += subagentWriteTargetLabel(rawName, executionArgs)
                     if (outcome.approvalDeferred) {

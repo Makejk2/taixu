@@ -69,7 +69,7 @@ data class AiModelEntity(
 )
 
 @Dao
-interface AiModelDao {
+interface AiModelDao : ModelManagementCas {
     @Query("SELECT * FROM harness_models ORDER BY isActive DESC, createdAt ASC")
     fun observeAll(): Flow<List<AiModelEntity>>
 
@@ -90,6 +90,10 @@ interface AiModelDao {
     suspend fun importBatch(expected: List<AiModelEntity>, models: List<AiModelEntity>) {
         check(listAll().associateBy { it.id } == expected.associateBy { it.id }) { "模型档案已变化，请重新预览后导入" }
         require(models.map { it.id }.distinct().size == models.size) { "导入档案 ID 重复" }
+        require(models.count { it.isActive } <= 1) { "导入不能同时激活多个档案" }
+        // Selecting a default and replacing rows are one transaction, never a separate
+        // clearActive/upsert window or two active profiles after a batch import.
+        if (models.any { it.isActive }) clearActive()
         models.forEach { upsert(it) }
     }
 
@@ -111,6 +115,14 @@ interface AiModelDao {
 
     @Query("UPDATE harness_models SET reasoningMode = :mode, reasoningEffort = :effort WHERE id = :id")
     suspend fun updateReasoning(id: String, mode: String?, effort: String?)
+
+    @Transaction
+    suspend fun deleteSnapshot(expected: List<AiModelEntity>, id: String) {
+        check(listAll().associateBy { it.id } == expected.associateBy { it.id }) { "模型档案已变化，请重新确认" }
+        val removed = requireNotNull(expected.find { it.id == id })
+        delete(id)
+        if (removed.isActive) expected.filterNot { it.id == id }.minByOrNull { it.createdAt }?.let { activate(it.id) }
+    }
 
     @Query("DELETE FROM harness_models WHERE id = :id")
     suspend fun delete(id: String)

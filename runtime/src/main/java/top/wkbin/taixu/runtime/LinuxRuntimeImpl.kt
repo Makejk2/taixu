@@ -21,6 +21,7 @@ import top.wkbin.taixu.runtime.bridge.HostBridge
 import top.wkbin.taixu.runtime.bridge.SandboxCredentialStore
 import top.wkbin.taixu.runtime.pty.PtyManager
 import top.wkbin.taixu.runtime.proot.ProotInstaller
+import top.wkbin.taixu.runtime.rootfs.approvedImage
 import top.wkbin.taixu.runtime.rootfs.RootfsInstaller
 import top.wkbin.taixu.runtime.terminal.terminalBanner
 import top.wkbin.taixu.runtime.shell.CommandResult
@@ -70,6 +71,7 @@ class LinuxRuntimeImpl(
     override val installedDistros: StateFlow<List<InstalledDistro>> = _installedDistros.asStateFlow()
     private val initializeMutex = Mutex()
     private val storageActivities = StorageActivityGate()
+    private var managementGeneration = 0L
     private val interactiveSessions = InteractiveSessionRegistry()
     private val commandAdmission = ForegroundCommandAdmission()
     override fun refreshInstalledDistros() {
@@ -100,10 +102,11 @@ class LinuxRuntimeImpl(
         _installedDistros.value = list
     }
 
-    override suspend fun switchActiveDistro(distroId: String): AppResult<Unit> = initializeMutex.withLock {
+    override suspend fun switchActiveDistro(distroId: String): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; switchDistroLocked(distroId) }
+    private suspend fun switchDistroLocked(distroId: String): AppResult<Unit> = run {
         val safeId = distroId.lowercase().trim()
         if (!pathManager.isDistroInstalled(safeId)) {
-            return@withLock AppResult.Failure(
+            return@run AppResult.Failure(
                 AppError(ErrorCode.RUNTIME_NOT_INITIALIZED, "系统未安装或文件不完整：$safeId"),
             )
         }
@@ -118,12 +121,14 @@ class LinuxRuntimeImpl(
     override suspend fun installDistro(
         request: RuntimeInstallRequest,
         onProgress: suspend (DownloadProgress) -> Unit,
-    ): AppResult<Unit> = initializeMutex.withLock {
-        withContext(Dispatchers.IO) {
+    ): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; withRuntimeMaintenance { installDistroLocked(request, onProgress) } }
+    private suspend fun installDistroLocked(request: RuntimeInstallRequest,
+        onProgress: suspend (DownloadProgress) -> Unit): AppResult<Unit> = withContext(Dispatchers.IO) {
             val distroId = request.distributionId.lowercase().trim()
             val distribution = DistributionCatalog.require(distroId)
             logger.i("Installing new distro: ${distribution.displayName} ($distroId)")
-            val result = rootfsInstaller.installOci(distribution, request.registryRoute, onProgress)
+            val result = rootfsInstaller.installOci(
+                distribution.approvedImage(request.approvedManifestDigest), request.registryRoute, onProgress)
             val error = result.errorOrNull()
             if (error != null) {
                 return@withContext AppResult.Failure(error)
@@ -134,13 +139,13 @@ class LinuxRuntimeImpl(
             refreshInstalledDistros()
             logger.i("Distro $distroId installed successfully")
             AppResult.Success(Unit)
-        }
     }
 
     override suspend fun importDistro(
         request: RuntimeInstallRequest,
         archive: File,
-    ): AppResult<Unit> = initializeMutex.withLock {
+    ): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; withRuntimeMaintenance { importDistroLocked(request, archive) } }
+    private suspend fun importDistroLocked(request: RuntimeInstallRequest, archive: File): AppResult<Unit> =
         withContext(Dispatchers.IO) {
             try {
                 updateInitializing("校验设备环境", 0.05f)
@@ -189,9 +194,9 @@ class LinuxRuntimeImpl(
                 AppResult.Failure(AppError(ErrorCode.INSTALLATION_FAILED, throwable.message ?: "导入失败", throwable))
             }
         }
-    }
 
-    override suspend fun uninstallDistro(distroId: String): AppResult<Unit> = initializeMutex.withLock {
+    override suspend fun uninstallDistro(distroId: String): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; uninstallDistroLocked(distroId) }
+    private suspend fun uninstallDistroLocked(distroId: String): AppResult<Unit> = run {
         withRuntimeMaintenance {
             val safeId = distroId.lowercase().trim()
             val installed = pathManager.listInstalledDistroIds()
@@ -222,7 +227,8 @@ class LinuxRuntimeImpl(
         }
     }
 
-    override suspend fun resetSandbox(distroId: String?): AppResult<Unit> = initializeMutex.withLock {
+    override suspend fun resetSandbox(distroId: String?): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; resetSandboxLocked(distroId) }
+    private suspend fun resetSandboxLocked(distroId: String?): AppResult<Unit> = run {
         withRuntimeMaintenance {
             val safeId = (distroId ?: _activeDistroId.value).lowercase().trim()
             val wasActive = _activeDistroId.value == safeId
@@ -264,6 +270,7 @@ class LinuxRuntimeImpl(
     }
 
     override suspend fun initialize(request: RuntimeInstallRequest): AppResult<Unit> = initializeMutex.withLock {
+        managementGeneration++
         withContext(Dispatchers.IO) {
             if (_state.value is RuntimeState.Ready) {
                 return@withContext AppResult.Success(Unit)
@@ -359,6 +366,7 @@ class LinuxRuntimeImpl(
     }
 
     override suspend fun restoreInstalledState(): Boolean = initializeMutex.withLock {
+        managementGeneration++
         withContext(Dispatchers.IO) {
         if (_state.value is RuntimeState.Ready && hostBridge.isRunning.value) {
             return@withContext true
@@ -410,7 +418,11 @@ class LinuxRuntimeImpl(
         }
     }
 
-    override suspend fun updateRootfs(distroId: String?): AppResult<Unit> = initializeMutex.withLock {
+    override suspend fun updateRootfs(distroId: String?): AppResult<Unit> = updateRootfsBound(distroId, null)
+    override suspend fun updateRootfsApproved(distroId: String, manifestDigest: String): AppResult<Unit> =
+        updateRootfsBound(distroId, manifestDigest)
+    private suspend fun updateRootfsBound(distroId: String?, approvedDigest: String?): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; updateRootfsLocked(distroId, approvedDigest) }
+    private suspend fun updateRootfsLocked(distroId: String?, approvedDigest: String?): AppResult<Unit> = run {
         withRuntimeMaintenance {
             if (_state.value !is RuntimeState.Ready) {
                 return@withRuntimeMaintenance AppResult.Failure(
@@ -423,7 +435,7 @@ class LinuxRuntimeImpl(
                 updateInitializing("更新 RootFS", 0.05f, "保留 /root 和 /opt/taixu 用户数据")
                 val distribution = DistributionCatalog.require(targetDistro)
                 val result = rootfsInstaller.updateOci(
-                    distribution,
+                    distribution.approvedImage(approvedDigest),
                     RegistryRoute.AUTO,
                 ) { progress -> updateDownloadProgress("更新 ${distribution.displayName}", 0.1f, 0.65f, progress) }
                 result.errorOrNull()?.let { error ->
@@ -467,6 +479,36 @@ class LinuxRuntimeImpl(
                     AppError(ErrorCode.INSTALLATION_FAILED, throwable.message ?: "RootFS 更新失败", throwable),
                 )
             }
+        }
+    }
+
+    private fun managementSnapshotLocked(target: String, workspace: String): top.wkbin.taixu.runtime.admin.DistroResourceSnapshot {
+        DistributionCatalog.require(target)
+        require(workspace == "/workspace" || workspace.startsWith("/workspace/"))
+        val installed = pathManager.listInstalledDistroIds().toSet()
+        return top.wkbin.taixu.runtime.admin.DistroResourceSnapshot(managementGeneration,
+            _activeDistroId.value, _activeDistroId.value, target, workspace, 0L,
+            installed.associateWith { pathManager.rootfsDigest(it).orEmpty() }, installed)
+    }
+    override suspend fun managementSnapshot(target: String, workspace: String) = initializeMutex.withLock {
+        managementSnapshotLocked(target, workspace)
+    }
+    override suspend fun applyManagement(expected: top.wkbin.taixu.runtime.admin.DistroResourceSnapshot,
+        mutation: top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation): AppResult<Unit> = initializeMutex.withLock {
+        if (expected != managementSnapshotLocked(mutation.target, expected.workspaceId)) throw top.wkbin.taixu.runtime.admin.AdminSnapshotChanged()
+        managementGeneration++ // Consume the captured lifecycle generation even on partial failure.
+        when (mutation) {
+            is top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation.Switch -> switchDistroLocked(mutation.target)
+            is top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation.Update -> updateRootfsLocked(mutation.target, mutation.manifestDigest)
+            is top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation.Uninstall -> uninstallDistroLocked(mutation.target)
+            is top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation.Reset -> resetSandboxLocked(mutation.target)
+            is top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation.Install -> {
+                check(mutation.request.approvedManifestDigest != null) { "必须先批准固定镜像摘要" }
+                check(mutation.target !in expected.installedIds) { "发行版已存在，请使用更新操作" }
+                withRuntimeMaintenance { installDistroLocked(mutation.request) {} }
+            }
+            is top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation.Import ->
+                withRuntimeMaintenance { mutation.archive.withVerifiedArchive { importDistroLocked(mutation.request, it) } }
         }
     }
 
@@ -729,7 +771,7 @@ class LinuxRuntimeImpl(
 
     override fun clearBackgroundLogs(idOrToolId: String) = processRegistry.clearLogs(idOrToolId)
 
-    override suspend fun shutdown() = initializeMutex.withLock { withRuntimeMaintenance {
+    override suspend fun shutdown() = initializeMutex.withLock { managementGeneration++; withRuntimeMaintenance {
         closeRuntimeProcesses()
         hostBridge.stop()
         _state.value = RuntimeState.NotInitialized
@@ -746,6 +788,7 @@ class LinuxRuntimeImpl(
     override suspend fun withStorageCleanup(block: suspend () -> Unit) {
         check(initializeMutex.tryLock()) { "正在安装、更新或管理环境，请完成后再清理" }
         try {
+            managementGeneration++
             storageActivities.cleanup {
                 check(!interactiveSessions.hasSessions() && processRegistry.list().isEmpty() && !shellExecutor.hasPending()) {
                     "请先关闭终端并停止后台服务，再清理存储"

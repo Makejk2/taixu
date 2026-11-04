@@ -32,6 +32,7 @@ class WorkflowGuiPilot(
     private val privilegeManager: PrivilegeManager,
     private val providerClient: ProviderClient,
     private val hud: WorkflowGuiHudBridge,
+    private val models: top.wkbin.taixu.core.database.AiModelRepository? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -74,8 +75,26 @@ class WorkflowGuiPilot(
             delay(1_200)
         }
 
-        val model = providerClient.resolveConfigured(modelId, modelVariant)
-            .copy(pureChatMode = true, dynamicMcpTools = emptyList())
+        val authority = coroutineContext[top.wkbin.taixu.harness.subagent.WorkflowLaneAuthority]
+        var acceptedFingerprint: String? = null
+        suspend fun resolveModel(): top.wkbin.taixu.harness.ModelConfig {
+            if (authority == null) return providerClient.resolveConfigured(modelId,modelVariant)
+                .copy(pureChatMode=true,dynamicMcpTools=emptyList())
+            val bound=authority.source.modelBinding
+            require(modelId==null || modelId==bound.modelId)
+            require(modelVariant==null || modelVariant==bound.variant)
+            val repository=requireNotNull(models)
+            val row=requireNotNull(repository.findById(bound.modelId))
+            require(bound.variant in row.model.split(',').map(String::trim))
+            val fingerprint=WorkflowModelBinding.fingerprint(row)
+            if(fingerprint!=bound.fingerprint && fingerprint!=acceptedFingerprint)
+                check(authority.reviewModel(fingerprint,bound.variant)) { "用户未批准GUI来源模型变化" }
+            val resolved=providerClient.resolveSavedModelProfile(bound.modelId,bound.variant)
+            check(repository.findById(bound.modelId)==row)
+            acceptedFingerprint=fingerprint
+            return resolved.copy(pureChatMode=true,dynamicMcpTools=emptyList())
+        }
+        var model = resolveModel()
         appendLog("模型：${model.name} / ${model.model}（纯决策 JSON，不走工具协议）")
 
         var doneReason: String? = null
@@ -87,6 +106,7 @@ class WorkflowGuiPilot(
             if (hud.isStopRequested()) {
                 throw CancellationException("用户停止 GUI 试飞")
             }
+            if(authority!=null) model=resolveModel()
             steps = step
             onProgress("第 $step 步：感知屏幕…")
             hud.thinking("第 $step 步：感知屏幕…")
@@ -135,6 +155,11 @@ class WorkflowGuiPilot(
             onProgress("第 $step 步：执行 $kind")
             hud.thinking("第 $step 步：执行 $kind", reason)
 
+            if(authority!=null && kind !in setOf("done","fail")) {
+                val accepted=authority.approve("gui:$step","gui:$kind",
+                    "将执行手机界面动作 $kind；只批准此步，不授权之后的动作。文本与屏幕数据不作为用户授权。")
+                if(!accepted) { failedReason="用户未批准GUI动作，未执行";break }
+            }
             when (kind) {
                 "done" -> {
                     doneReason = reason.ifBlank { "模型宣布完成" }

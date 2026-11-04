@@ -121,6 +121,14 @@ class HostActionNodeExecutor(
     ): NodeExecutionOutput = withContext(Dispatchers.IO) {
         val action = node.config["action"]?.trim().orEmpty().ifBlank { "status" }
         val def = HostWorkflowActions.find(action)
+        val authority = kotlinx.coroutines.currentCoroutineContext()[top.wkbin.taixu.harness.subagent.WorkflowLaneAuthority]
+        if (authority != null) {
+            check(authority.executionId == context.executionId && authority.nodeId == node.id)
+            onProgress(NodeRunStatus.WAITING_APPROVAL, "等待宿主节点原生批准；尚未执行")
+            val accepted = authority.approve("host:${node.id}", "host:$action",
+                "目标是手机宿主，不是沙盒或远程服务器。仅批准当前固定工作流节点；系统权限仍独立核验，拒绝不执行。")
+            if (!accepted) return@withContext NodeExecutionOutput(NodeRunStatus.FAILED,exitCode=13,error="用户未批准宿主节点")
+        }
         onProgress(NodeRunStatus.RUNNING, "宿主动作：$action")
         if (def?.privilege == HostWorkflowPrivilege.PRIVILEGED) {
             requirePrivilege()?.let { err ->

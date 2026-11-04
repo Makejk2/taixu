@@ -83,8 +83,10 @@ fun TerminalScreen(
     val termBg = top.wkbin.taixu.ui.theme.terminalSurfaceColor(colorScheme)
     val termText = top.wkbin.taixu.ui.theme.terminalContentColor(colorScheme)
 
-    val bridge = remember(context) {
-        TaiXuTerminalBridge(context, viewModel?.sessionClientRouter)
+    val bridge = remember(context, viewModel) {
+        TaiXuTerminalBridge(context, viewModel?.sessionClientRouter) { session, bytes ->
+            viewModel?.writeNative(session, bytes)
+        }
     }
     // Attach before AndroidView layout so the first PTY callbacks aren't dropped.
     bridge.attachToRouter()
@@ -203,7 +205,7 @@ fun TerminalScreen(
                             var appliedFontPx by remember { mutableStateOf(fontPx) }
                             AndroidView(
                                 factory = { ctx ->
-                                    TaiXuTerminalHost(ctx).also { host ->
+                                    TaiXuTerminalHost(ctx, bridge::sendBytes).also { host ->
                                         // Client before attachSession (updateSize → onEmulatorSet).
                                         bridge.terminalView = host.terminalView
                                         host.terminalView.setTextSize(fontPx)

@@ -63,9 +63,12 @@ class WorkflowScheduler(
         restored: WorkflowRuntimeState? = null,
         environmentId: String? = null,
         executionLease: (suspend (String, suspend () -> Unit) -> Unit)? = null,
+        initialExecutionId: String? = null,
     ): WorkflowRunHandle {
         require(restored == null || restored.definition == definition) { "恢复时不能替换工作流定义" }
-        val executionId = restored?.executionId ?: "wf_${UUID.randomUUID()}"
+        require(initialExecutionId == null || initialExecutionId.isNotBlank()) { "执行 ID 不能为空" }
+        require(restored == null || initialExecutionId == null || restored.executionId == initialExecutionId) { "恢复执行 ID 不匹配" }
+        val executionId = restored?.executionId ?: initialExecutionId ?: "wf_${UUID.randomUUID()}"
         val mutableState = MutableStateFlow(restored ?: WorkflowRuntimeState.initial(executionId, definition).copy(
             journalVersion = if (checkpoint == null) 0 else 1, runtimeEnvironmentId = environmentId,
         ))
@@ -78,7 +81,11 @@ class WorkflowScheduler(
         val settled = AtomicBoolean(false)
         val job = scope.launch {
             try {
-                val run: suspend () -> Unit = { runWorkflow(executionId, definition, initialVariables, workspacePath, mutableState, journal, restored != null) }
+                val run: suspend () -> Unit = {
+                    // 恢复运行前先在租约内重放持久批准链；无租约时为空操作。
+                    currentCoroutineContext()[WorkflowExecutionContext]?.verifyHistory(mutableState.value)
+                    runWorkflow(executionId, definition, initialVariables, workspacePath, mutableState, journal, restored != null)
+                }
                 if (executionLease == null) run() else executionLease(executionId, run)
             } catch (cancelled: CancellationException) { throw cancelled
             } catch (error: Throwable) {
@@ -204,6 +211,7 @@ class WorkflowScheduler(
         var output: NodeExecutionOutput
         do {
             var expansion: WorkflowExpansion? = null
+            var admission: top.wkbin.taixu.core.model.workflow.WorkflowExpansionAdmission? = null
             attempts++
             updateNode(state, node.id, NodeRunStatus.RUNNING, if (attempts > 1) "正在重试" else "正在执行")
             journal?.started(node.id)
@@ -230,20 +238,28 @@ class WorkflowScheduler(
                         check(journal != null) { "动态扩图需要持久化执行日志" }
                         approveExpansion(node, context, state.value.definition, approvalBroker, onProgress).let {
                             expansion = it.patch
+                            admission = it.admission
                             it.output
                         }
                     } else executor.execute(node, context, onProgress)
                 }
                 val guarded: suspend () -> NodeExecutionOutput = {
                     val lease = currentCoroutineContext()[WorkflowExecutionContext]
-                    if (lease == null) action() else lease.operation(state.value.definition) { action() }
+                    if (lease == null) action() else lease.operation(state.value) {
+                        // 来源绑定运行必须先生效批准链重放与逐节点原生授权，之后才执行动作。
+                        val source = lease.binding.source
+                        if (source == null) action() else withWorkflowSourceAuthority(
+                            source, executionId, node.id, approvalBroker,
+                            onApprovalState = { waiting -> onProgress(
+                                if (waiting) NodeRunStatus.WAITING_APPROVAL else NodeRunStatus.RUNNING,
+                                if (waiting) "等待原生批准，未执行新动作" else "原生批准等待已结束") }, block = action)
+                    }
                 }
-                if (timeoutMs == null) {
-                    guarded()
-                } else {
-                    withTimeoutOrNull(timeoutMs) { guarded() }
-                        ?: NodeExecutionOutput(NodeRunStatus.FAILED, exitCode = 124, error = "节点超时（${timeoutMs / 1_000} 秒）")
-                }
+                if (currentCoroutineContext()[WorkflowExecutionContext]?.binding?.source != null)
+                    withWorkflowExecutionBudget(timeoutMs, guarded)
+                else if (timeoutMs == null) guarded()
+                else withTimeoutOrNull(timeoutMs) { guarded() }
+                    ?: NodeExecutionOutput(NodeRunStatus.FAILED, exitCode = 124, error = "节点超时（${timeoutMs / 1_000} 秒）")
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Throwable) {
@@ -251,7 +267,7 @@ class WorkflowScheduler(
             }
             if (output.durationMs == 0L) output = output.copy(durationMs = (System.nanoTime() - started) / 1_000_000L)
             if (output.status != NodeRunStatus.SUCCESS) expansion = null
-            journal?.settled(node.id, output, expansion)
+            journal?.settled(node.id, output, expansion, admission.takeIf { expansion != null })
         } while (output.status == NodeRunStatus.FAILED && attempts < maxAttempts)
 
         if (output.status == NodeRunStatus.FAILED && node.failurePolicy == FailurePolicy.ASK_USER) {

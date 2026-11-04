@@ -158,6 +158,8 @@ internal suspend fun BotAssignmentDao.releaseCommunication(row: TeamCommunicatio
     val p = communicationPolicy(row.groupId).policy()
     p.validate()
     val reason = when {
+        // backup 新增：目标事务因用户规则暂停时，交付挂起而不是计费失败重试。
+        target?.status == "BLOCKED" && target.error?.startsWith("USER_RULE_PAUSED") == true -> "target_policy_paused"
         p.groupLimit > 0 && communicationCharged(row.groupId) >= p.groupLimit -> "group_budget"
         p.memberLimit > 0 && memberCommunicationCharged(row.groupId, row.sourceMemberId) >= p.memberLimit -> "member_budget"
         row.hop > p.maxHop -> "hop_budget"

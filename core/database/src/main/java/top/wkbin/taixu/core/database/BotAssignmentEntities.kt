@@ -163,7 +163,11 @@ interface BotAssignmentDao : TeamOwnershipDao, TeamCommunicationDao, NativeTeamS
         // Uncertain native effects require explicit resumption, even if a later instruction was queued.
         val waiting = !uncertain && success && (waitingUnbatchedChildren(task.id) > 0 ||
             task.sessionId?.let { waitingChildBatches(it) > 0 } == true)
-        val status = if (!uncertain && queuedAssignmentRequests(task.id) > 0) "QUEUED" else if (waiting) "WAITING_CHILDREN" else outcome
+        val policyPaused = request.blockedReason?.startsWith("USER_RULE_PAUSED") == true
+        // Already queued peer messages are not user authorization to resume a policy stop.
+        val status = if (policyPaused) "BLOCKED"
+            else if (!uncertain && queuedAssignmentRequests(task.id) > 0) "QUEUED"
+            else if (waiting) "WAITING_CHILDREN" else outcome
         if (uncertain) settleInterruptedAssignmentMessages(task.id, "⚠️ 原执行结果待核对，未自动重跑")
         val detail = if (uncertain) error else request.blockedReason ?: if (!success) error else if (waiting) "等待直属下级交付后在原任务验收" else null
         settleAssignment(task.id, status, now, summary, detail)

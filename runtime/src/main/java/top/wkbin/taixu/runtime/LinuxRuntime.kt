@@ -25,6 +25,15 @@ interface LinuxRuntime {
     suspend fun initialize(request: RuntimeInstallRequest = RuntimeInstallRequest("ubuntu")): AppResult<Unit>
     suspend fun restoreInstalledState(): Boolean
     suspend fun updateRootfs(distroId: String? = null): AppResult<Unit>
+    /** Reviewed update must not silently fall back to a mutable tag on older implementations. */
+    suspend fun updateRootfsApproved(distroId: String, manifestDigest: String): AppResult<Unit> =
+        error("当前运行时未提供固定镜像更新入口")
+    /** Snapshot and mutation share the native lifecycle owner, including native UI writers. */
+    suspend fun managementSnapshot(target: String, workspace: String): top.wkbin.taixu.runtime.admin.DistroResourceSnapshot =
+        error("RUNTIME_OWNER_TRANSACTION_UNAVAILABLE")
+    suspend fun applyManagement(expected: top.wkbin.taixu.runtime.admin.DistroResourceSnapshot,
+        mutation: top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation): AppResult<Unit> =
+        error("RUNTIME_OWNER_TRANSACTION_UNAVAILABLE")
     suspend fun checkRootfsUpdate(distroId: String? = null): AppResult<RootfsUpdateInfo>
     suspend fun healthCheck(distroId: String? = null): RuntimeHealth
 

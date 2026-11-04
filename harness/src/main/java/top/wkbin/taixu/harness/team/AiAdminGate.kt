@@ -6,6 +6,9 @@ import kotlinx.serialization.json.JsonPrimitive
 /** Disabling still permits inspection, grant revocation and stopping previously started teams. */
 internal fun aiAdminRequiresEnabled(tool: String, args: JsonObject): Boolean {
     val action = (args["action"] as? JsonPrimitive)?.content.orEmpty()
+    // backup 新增：model 模块的只读动作（列/查/表单状态）在超管关闭时仍允许；写动作一律要求开启。
+    if (tool == "app_config" && (args["module"] as? JsonPrimitive)?.content == "model")
+        return action !in setOf("list", "get", "form_status")
     if (tool == "app_config" && (args["module"] as? JsonPrimitive)?.content == "workflow")
         return action !in setOf("list", "get", "status")
     if (tool == "app_config") return action !in setOf("list", "get", "grants", "revoke", "modules", "inspect_module")

@@ -1,6 +1,8 @@
 package top.wkbin.taixu.core.tools
 
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import top.wkbin.taixu.core.database.AiModelEntity
 import top.wkbin.taixu.core.database.AiModelRepository
 import top.wkbin.taixu.core.model.AiModelProfileExport
@@ -15,10 +17,19 @@ class AiProfileWriter(
     private val aiModelDao: AiModelRepository,
     private val providerRepository: ModelCredentialStore,
 ) {
+    private suspend fun <T> lifecycle(block: suspend () -> T): T = ModelCredentialLifetime.serialized(block)
+
     suspend fun importProfiles(
         profiles: List<AiModelProfileExport>,
         mode: AiProfileImportMode,
-    ): Int = importModelProfiles(aiModelDao, providerRepository, profiles, mode)
+    ): Int = lifecycle { importModelProfiles(aiModelDao, providerRepository, profiles, mode) }
+
+    /** Explicit native cleanup only. Materialized in-flight ModelConfig values retain their
+     * key strings; stale profile resolution rechecks Room under this very same lock. */
+    suspend fun cleanupRetiredCredentialsFromNative(): Int = lifecycle {
+        val references=aiModelDao.observeAll().first().mapTo(mutableSetOf()) { it.secretRef }
+        providerRepository.eraseRetiredModelKeys(references)
+    }
 
     /** 解析多行 Key 文本为去重的 Key 列表 */
     fun parseApiKeys(raw: String): List<String> = raw
@@ -60,17 +71,26 @@ class AiProfileWriter(
         val promptCacheTtl1h: Boolean = false,
     )
 
-    suspend fun upsertProfile(request: UpsertRequest) {
+    suspend fun upsertProfile(request: UpsertRequest) = lifecycle {
+        upsertLocked(request)
+    }
+
+    private suspend fun upsertLocked(request: UpsertRequest) {
         val existing = aiModelDao.observeAll().first()
         val old = request.id?.let { aiModelDao.findById(it) }
         val modelId = request.id ?: UUID.randomUUID().toString()
-        val secretRef = old?.secretRef?.takeIf { it.isNotBlank() } ?: "model_${modelId.replace("-", "")}"
+        val submittedSecret = parseApiKeys(request.apiKey)
+        // A changed endpoint/provider must never inherit the previous provider's credentials.
+        require(old == null || (old.provider.trim() == request.provider.trim() && old.baseUrl.trim() == request.baseUrl.trim()) || submittedSecret.isNotEmpty()) {
+            "更换模型来源必须在原生表单重新填写凭据，不能复用旧密钥"
+        }
+        val secretRef = "model_${modelId.replace("-", "")}_${UUID.randomUUID().toString().replace("-", "")}"
         val submittedKeys = parseApiKeys(request.apiKey)
-        val existingKeys = old?.let { providerRepository.readModelApiKeys(secretRef) }.orEmpty()
-        // 没有任何活跃档案，或正在编辑当前活跃档案时，先清空活跃标记再写入
-        if (existing.none { it.isActive } || old?.isActive == true) aiModelDao.clearActive()
-        aiModelDao.upsert(
-            AiModelEntity(
+        val existingKeys = old?.secretRef?.takeIf { it.isNotBlank() }?.let { providerRepository.readModelApiKeys(it) }.orEmpty()
+        val keys = submittedKeys.ifEmpty { existingKeys }
+        // New reference first: old readers keep valid credentials until the Room CAS commits.
+        providerRepository.setModelApiKeys(secretRef, keys)
+        val replacement = AiModelEntity(
                 id = modelId,
                 name = request.name.trim(),
                 provider = request.provider.trim(),
@@ -97,13 +117,27 @@ class AiProfileWriter(
                 promptCacheTtl1h = request.promptCacheTtl1h,
                 apiKeyCount = submittedKeys.ifEmpty { existingKeys }.size,
                 requestsPerMinutePerKey = request.requestsPerMinutePerKey.coerceAtLeast(0),
-            ),
-        )
-        if (submittedKeys.isNotEmpty()) providerRepository.setModelApiKeys(secretRef, submittedKeys)
+
+            )
+        try {
+            aiModelDao.importBatch(existing, listOf(replacement))
+        } catch (failure: Throwable) {
+            // A journal/transport failure may be ambiguous: do not delete a possibly referenced key.
+            val committed = runCatching { aiModelDao.findById(modelId)?.secretRef == secretRef }.getOrNull()
+            if (committed == false) runCatching { providerRepository.removeModelApiKey(secretRef) }
+            throw failure
+        }
+        old?.secretRef?.takeIf { it.isNotBlank() && it != secretRef }?.let { providerRepository.retireModelApiKey(it) }
+        // Retain the old secret reference until native cleanup can prove there are no in-flight
+        // model requests. It is never exposed to AI and never silently reused for another source.
     }
 
-    suspend fun deleteProfile(id: String) {
-        aiModelDao.findById(id)?.secretRef?.takeIf { it.isNotBlank() }?.let { providerRepository.removeModelApiKey(it) }
-        aiModelDao.delete(id)
+    suspend fun deleteProfile(id: String) = lifecycle {
+        val expected = aiModelDao.observeAll().first()
+        require(expected.any { it.id == id }) { "模型档案不存在" }
+        aiModelDao.deleteSnapshot(expected,id)
+        expected.single { it.id==id }.secretRef.takeIf { it.isNotBlank() }?.let { providerRepository.retireModelApiKey(it) }
+        // Credential reference retirement is deliberately separate from deletion: in-flight
+        // approved requests may still hold it. Native cleanup must verify liveness first.
     }
 }

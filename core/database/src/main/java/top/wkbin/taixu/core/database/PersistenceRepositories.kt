@@ -29,6 +29,8 @@ interface HarnessSessionRepository {
     suspend fun deleteSession(id: String)
     suspend fun countInRange(start: Long?, end: Long?): Int
     suspend fun listAll(): List<HarnessSessionEntity>
+    /** Only the native user-session constructor calls this; no inference from absent bot records. */
+    suspend fun registerNativeUserSession(id: String) { error("SESSION_PROVENANCE_UNAVAILABLE") }
 }
 
 interface WorkspaceRepository {

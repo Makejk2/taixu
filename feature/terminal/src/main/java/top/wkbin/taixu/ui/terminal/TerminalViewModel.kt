@@ -47,6 +47,9 @@ class TerminalViewModel(
     private val remoteServers: RemoteServerRepository,
     private val workspaceCatalog: SessionWorkspaceCatalog,
 ) : ViewModel() {
+    fun writeNative(session: com.termux.terminal.TerminalSession, bytes: ByteArray) =
+        terminalManager.writeNative(session, bytes)
+
     private var initialized = false
 
     val firstUseGuidesShown: StateFlow<Set<String>> = firstUseGuidePreferences.firstUseGuidesShown

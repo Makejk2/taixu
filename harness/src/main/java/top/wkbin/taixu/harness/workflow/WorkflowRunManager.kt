@@ -131,25 +131,29 @@ class WorkflowRunManager(
         workspacePath: String,
         trigger: WorkflowRunTrigger = WorkflowRunTrigger.Manual,
         binding: WorkflowExecutionBinding? = null,
+        executionId: String? = null,
     ): WorkflowStartResult {
+        require(executionId == null || executionId.isNotBlank()) { "执行 ID 不能为空" }
         binding?.verify(definition)
         check(binding == null || (executionLeases != null && workspacePath == binding.workspace)) { "缺少工作流执行租约或工作区不匹配" }
-        if (linuxRuntime.state.value !is RuntimeState.Ready) {
+        // 远程冻结目标不依赖本地 Linux 沙箱就绪；本地目标仍必须先就绪，绝不回退到别的发行版。
+        if (binding?.target()?.remote == null && linuxRuntime.state.value !is RuntimeState.Ready) {
             awaitRuntimeReady()?.let { failure ->
-                val executionId = "wf_${UUID.randomUUID()}"
-                val failedState = WorkflowRuntimeState.initial(executionId, definition).copy(
+                val failedExecutionId = executionId ?: "wf_${UUID.randomUUID()}"
+                val failedState = WorkflowRuntimeState.initial(failedExecutionId, definition).copy(
                     status = WorkflowRunStatus.FAILED,
                     startedAt = System.currentTimeMillis(),
                     finishedAt = System.currentTimeMillis(),
                     error = failure,
                 )
                 historyWriter.save(failedState, trigger.triggerSource, (trigger as? WorkflowRunTrigger.Schedule)?.scheduleId)
-                return WorkflowStartResult(executionId, failure)
+                return WorkflowStartResult(failedExecutionId, failure)
             }
         }
         val handle = scheduler.execute(definition, variables, workspacePath, runScope,
             checkpoint = durableCheckpoint(trigger.triggerSource, (trigger as? WorkflowRunTrigger.Schedule)?.scheduleId),
             environmentId = binding?.encode() ?: linuxRuntime.activeDistroId.value,
+            initialExecutionId = executionId,
             executionLease = binding?.let { frozen -> { id, run -> executionLeases!!.use(id, frozen, run) } })
         return register(handle, trigger)
     }
@@ -166,9 +170,11 @@ class WorkflowRunManager(
         val plan = WorkflowRecovery.inspect(snapshot)
         if (!plan.canResume) return@withLock rejected(plan.blockedReason!!)
         if (retryNodeIds != plan.retryNodeIds) return@withLock rejected("请逐个确认所有失败或结果不确定的节点；不允许重试已完成节点")
-        if (linuxRuntime.state.value !is RuntimeState.Ready) return@withLock rejected("Linux 沙箱尚未就绪，请就绪后继续")
-        val binding = try { WorkflowExecutionBinding.decode(snapshot.runtimeEnvironmentId)?.also { it.verify(snapshot.definition) } }
+        // 恢复校验必须针对未扩图的基线定义，且远程冻结目标不依赖本地沙箱就绪。
+        val binding = try { WorkflowExecutionBinding.decode(snapshot.runtimeEnvironmentId)?.also { it.verify(snapshot.baseDefinition ?: snapshot.definition) } }
             catch (error: Exception) { return@withLock rejected(error.message ?: "执行目标记录无效") }
+        if (binding?.target()?.remote == null && linuxRuntime.state.value !is RuntimeState.Ready)
+            return@withLock rejected("Linux 沙箱尚未就绪，请就绪后继续")
         if (binding != null && executionLeases == null) return@withLock rejected("工作流执行租约不可用")
         if (binding == null && snapshot.runtimeEnvironmentId != linuxRuntime.activeDistroId.value) return@withLock rejected("当前发行版与原运行不同，请先切回原发行版")
         val interrupted = snapshot.journal.groupBy { it.nodeId }.values.map { it.last() }.filter { it.kind == WorkflowJournalKind.STARTED }
@@ -183,6 +189,7 @@ class WorkflowRunManager(
         val trigger = row.scheduleId?.takeIf { row.triggerSource == "SCHEDULE" }?.let { WorkflowRunTrigger.Schedule(it) } ?: WorkflowRunTrigger.Manual
         register(scheduler.execute(snapshot.definition, emptyMap(), context.workspacePath, runScope,
             checkpoint = durableCheckpoint(row.triggerSource, row.scheduleId), restored = restored,
+            initialExecutionId = executionId,
             executionLease = binding?.let { frozen -> { id, run -> executionLeases!!.use(id, frozen, run) } }), trigger)
     }
 
