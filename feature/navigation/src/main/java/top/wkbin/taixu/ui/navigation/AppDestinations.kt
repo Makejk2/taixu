@@ -41,7 +41,7 @@ sealed interface AppDestination : NavKey
 @Serializable data object ModelProfilesDestination : AppDestination
 @Serializable data object LocalLlmDestination : AppDestination
 @Serializable data object PhoneAgentSettingsDestination : AppDestination
-@Serializable data class ModelEditorDestination(val modelId: String? = null) : AppDestination
+@Serializable data class ModelEditorDestination(val modelId: String? = null, val nativeRequestId: String? = null) : AppDestination
 @Serializable data object QuickPhrasesDestination : AppDestination
 @Serializable data object StatsDestination : AppDestination
 @Serializable data object PermissionGuideDestination : AppDestination

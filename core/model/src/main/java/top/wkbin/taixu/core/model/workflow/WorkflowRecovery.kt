@@ -14,6 +14,7 @@ data class WorkflowJournalEntry(
     val timestamp: Long,
     val output: NodeExecutionOutput? = null,
     val expansion: WorkflowExpansion? = null,
+    val expansionAdmission: WorkflowExpansionAdmission? = null,
 )
 
 data class WorkflowRecoveryPlan(
@@ -62,6 +63,11 @@ object WorkflowRecovery {
             latest[entry.nodeId] = entry
         }
         if (state.journal.size + latest.values.count { it.kind == WorkflowJournalKind.STARTED } >= 10_000) return blocked("执行日志容量已满，请另起一次运行")
+        // Only these local/control nodes can safely retain FAILED+CONTINUE results.
+        // Everything else may have produced an external effect even when it reported failure.
+        val pureNodeTypes = setOf(WorkflowNodeType.HUMAN_APPROVAL, WorkflowNodeType.DELAY,
+            WorkflowNodeType.CONDITION_BRANCH, WorkflowNodeType.TRIGGER,
+            WorkflowNodeType.TERMINAL_OUTPUT, WorkflowNodeType.SET_VARIABLE)
         val cached = linkedMapOf<String, NodeExecutionOutput>()
         val retry = linkedSetOf<String>()
         nodes.forEach { (id, node) ->
@@ -69,9 +75,10 @@ object WorkflowRecovery {
             if (WorkflowExpansions.SOURCE_KEY in node.config && entry?.output?.status == NodeRunStatus.SUCCESS && entry.expansion == null)
                 return blocked("扩图审批缺少已确认的新增步骤")
             if (entry?.kind in setOf(WorkflowJournalKind.STARTED, WorkflowJournalKind.INTERRUPTED)) {
-                if (node.type !in setOf(WorkflowNodeType.HUMAN_APPROVAL, WorkflowNodeType.DELAY, WorkflowNodeType.CONDITION_BRANCH, WorkflowNodeType.TRIGGER, WorkflowNodeType.TERMINAL_OUTPUT, WorkflowNodeType.SET_VARIABLE)) retry += id
+                if (node.type !in pureNodeTypes) retry += id
             } else if (entry?.output != null) {
-                if (entry.output.status == NodeRunStatus.SUCCESS || node.failurePolicy == FailurePolicy.CONTINUE) cached[id] = entry.output
+                if (entry.output.status == NodeRunStatus.SUCCESS ||
+                    node.failurePolicy == FailurePolicy.CONTINUE && node.type in pureNodeTypes) cached[id] = entry.output
                 else retry += id
             }
         }

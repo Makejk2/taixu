@@ -213,6 +213,7 @@ class HarnessToolRoundRunner(
         val publication = OrderedToolPublication(executable.size)
         val roundHadSuccess = AtomicBoolean(false)
         val approvalPauseRequested = AtomicBoolean(false)
+        val policyPauseRequested = AtomicBoolean(false)
         toolRoundDispatcher.dispatch(
             items = executable.withIndex().toList(),
             mutationScope = sessionWorkspace,
@@ -268,6 +269,11 @@ class HarnessToolRoundRunner(
                     val duration = now() - toolStart
                     publication.result(index) {
                         agentEventLogger.log(sessId, "ToolResult", "Tool=${item.tool.name}, CallId=${toolCall.id}, Success=${outcome.success}, Duration=${duration}ms, OutputChars=${outcome.output.length}, AwaitingApproval=${outcome.awaitingApproval}")
+                        if (outcome.policyPaused) {
+                            pause.abort()
+                            policyPauseRequested.set(true)
+                            stateMirrors.setStatus(sessId,"用户规则暂停：调整规则或预算后继续；未授权执行原动作")
+                        }
                         if (outcome.awaitingApproval) {
                             metrics.approvalRequested()
                             stateMirrors.setStatus(sessId, "等待用户批准")
@@ -285,6 +291,10 @@ class HarnessToolRoundRunner(
                     }
                 },
             )
+        }
+        if (policyPauseRequested.get()) {
+            operationCoordinator.suspendOperation(operationId,"USER_RULE_PAUSED：原工具未执行；恢复须重核规则，不是批准")
+            throw UserRulePauseException()
         }
         if (approvalPauseRequested.get()) {
             // All in-flight results must settle before persisting the approval boundary.
@@ -309,3 +319,5 @@ class HarnessToolRoundRunner(
 }
 
 internal class ApprovalPauseException : RuntimeException()
+
+internal class UserRulePauseException : RuntimeException()

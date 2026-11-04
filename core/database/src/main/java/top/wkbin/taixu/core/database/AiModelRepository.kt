@@ -13,6 +13,7 @@ interface AiModelRepository {
     suspend fun activate(id: String) // 唯一激活切换：clearActive + setActive 必须单事务（转发 AiModelDao.activate）
     suspend fun updateReasoning(id: String, mode: String?, effort: String?)
     suspend fun delete(id: String)
+    suspend fun deleteSnapshot(expected: List<AiModelEntity>, id: String) { error("MODEL_DELETE_CAS_UNAVAILABLE") }
 }
 
 class RoomAiModelRepository(private val dao: AiModelDao) : AiModelRepository {
@@ -26,5 +27,6 @@ class RoomAiModelRepository(private val dao: AiModelDao) : AiModelRepository {
     override suspend fun activate(id: String) = dao.activate(id)
     override suspend fun updateReasoning(id: String, mode: String?, effort: String?) = dao.updateReasoning(id, mode, effort)
     override suspend fun delete(id: String) = dao.delete(id)
+    override suspend fun deleteSnapshot(expected: List<AiModelEntity>, id: String) = dao.deleteSnapshot(expected,id)
 }
 

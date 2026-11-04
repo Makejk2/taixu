@@ -1,6 +1,10 @@
 package top.wkbin.taixu.core.database
 
 class RoomHarnessSessionRepository(private val dao: HarnessSessionDao) : HarnessSessionRepository {
+    override suspend fun registerNativeUserSession(id: String) {
+        check(dao.registerNativeUserSession(id, System.currentTimeMillis()) == 1 || dao.isExplicitlyClaimed(id)) { "SESSION_PROVENANCE_UNAVAILABLE" }
+    }
+
     override suspend fun bindExecutionTarget(id: String, target: String) = dao.bindExecutionTarget(id, target)
     override fun observeAll() = dao.observeAll()
     override suspend fun findById(id: String) = dao.findById(id)

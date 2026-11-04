@@ -1,6 +1,7 @@
 package top.wkbin.taixu.runtime.webchat
 
 import java.io.File
+import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -18,7 +19,7 @@ class AndroidHttpServerTest {
 
     @Test
     fun `serves a fixed length response over a socket`() {
-        val port = ServerSocket(0).use { it.localPort }
+        val port = reservePort()
         val server = AndroidHttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
         server.createContext("/api/test") { exchange ->
             val body = "{\"ok\":true}".toByteArray()
@@ -29,8 +30,9 @@ class AndroidHttpServerTest {
         }
 
         try {
-            server.start()
+            startWithDiagnostics(server, port)
             val response = Socket("127.0.0.1", port).use { socket ->
+                    clientDiagnostic(socket)
                 socket.soTimeout = 5_000
                 socket.getOutputStream().apply {
                     write("GET /api/test HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".toByteArray())
@@ -49,7 +51,7 @@ class AndroidHttpServerTest {
 
     @Test
     fun `stop closes open ended connections and releases the listening socket`() {
-        val port = ServerSocket(0).use { it.localPort }
+        val port = reservePort()
         val server = AndroidHttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
         val streaming = CountDownLatch(1)
         server.createContext("/api/events") { exchange ->
@@ -63,8 +65,9 @@ class AndroidHttpServerTest {
 
         val client = Socket()
         try {
-            server.start()
+            startWithDiagnostics(server, port)
             client.connect(InetSocketAddress("127.0.0.1", port), 5_000)
+            clientDiagnostic(client)
             client.soTimeout = 5_000
             client.getOutputStream().apply {
                 write("GET /api/events HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray())
@@ -89,7 +92,10 @@ class AndroidHttpServerTest {
             // 监听 socket 已释放：同一端口可以立刻重新绑定。
             ServerSocket().use { probe ->
                 probe.reuseAddress = true
-                probe.bind(InetSocketAddress("127.0.0.1", port))
+                diagnoseBind("post-stop-probe", port, "${probe.reuseAddress} (getter)") {
+                    probe.bind(InetSocketAddress("127.0.0.1", port))
+                    println("HTTP_PROBE local=${probe.localSocketAddress}")
+                }
             }
         } finally {
             runCatching { client.close() }
@@ -99,7 +105,7 @@ class AndroidHttpServerTest {
 
     @Test
     fun `sendFileResponse streams large files with an exact content length`() {
-        val port = ServerSocket(0).use { it.localPort }
+        val port = reservePort()
         val server = AndroidHttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
         // 3MB：远超单次 read 缓冲，验证分块写入与 Content-Length 一致。
         val source = File.createTempFile("taixu-download", ".bin")
@@ -110,8 +116,9 @@ class AndroidHttpServerTest {
         }
 
         try {
-            server.start()
+            startWithDiagnostics(server, port)
             val raw = Socket("127.0.0.1", port).use { socket ->
+                    clientDiagnostic(socket)
                 socket.soTimeout = 10_000
                 socket.getOutputStream().apply {
                     write("GET /api/download HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".toByteArray())
@@ -138,7 +145,7 @@ class AndroidHttpServerTest {
 
     @Test
     fun `server can be restarted after stop`() {
-        val port = ServerSocket(0).use { it.localPort }
+        val port = reservePort()
         val server = AndroidHttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
         server.createContext("/api/ping") { exchange ->
             val body = "pong".toByteArray()
@@ -149,8 +156,9 @@ class AndroidHttpServerTest {
 
         try {
             repeat(2) {
-                server.start()
+                startWithDiagnostics(server, port, it + 1)
                 val response = Socket("127.0.0.1", port).use { socket ->
+                    clientDiagnostic(socket)
                     socket.soTimeout = 5_000
                     socket.getOutputStream().apply {
                         write("GET /api/ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n".toByteArray())
@@ -168,13 +176,13 @@ class AndroidHttpServerTest {
 
     @Test
     fun `injected executor is owned by the caller and survives stop`() {
-        val port = ServerSocket(0).use { it.localPort }
+        val port = reservePort()
         val server = AndroidHttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
         val injected = Executors.newSingleThreadExecutor()
         server.executor = injected
 
         try {
-            server.start()
+            startWithDiagnostics(server, port)
             server.stop(0)
             assertFalse("外部注入的线程池不应被 stop() 关闭", injected.isShutdown)
         } finally {
@@ -182,4 +190,83 @@ class AndroidHttpServerTest {
             server.stop(0)
         }
     }
+
+    private fun reservePort(): Int = ServerSocket().use { probe ->
+        diagnoseBind("reservation", 0, "${probe.reuseAddress} (getter)") {
+            probe.bind(InetSocketAddress(0))
+            println("HTTP_RESERVATION local=${probe.localSocketAddress}")
+            probe.localPort
+        }
+    }
+
+    private fun startWithDiagnostics(server: AndroidHttpServer, port: Int, ordinal: Int = 1) {
+        // The server has no public listener getter; configured=true is not an observed socket value.
+        diagnoseBind("start-$ordinal", port, "unavailable(no-public-getter) configured=true") { server.start() }
+    }
+
+    private fun clientDiagnostic(client: Socket) {
+        println("HTTP_CLIENT local=${client.localSocketAddress} remote=${client.remoteSocketAddress}")
+    }
+
+    private fun <T> diagnoseBind(phase: String, port: Int, reuse: String, block: () -> T): T {
+        val context = "phase=$phase port=$port reuse=$reuse " +
+            "requestedLocal=${if (port == 0) "*:0" else "127.0.0.1:$port"} " +
+            "jdk=${System.getProperty("java.runtime.version")} " +
+            "java.version=${System.getProperty("java.version")} java.home=${System.getProperty("java.home")} " +
+            "preferIPv4Stack=${System.getProperty("java.net.preferIPv4Stack", "<unset>")} " +
+            "preferIPv6Addresses=${System.getProperty("java.net.preferIPv6Addresses", "<unset>")} " +
+            "vendor=${System.getProperty("java.vendor")} os=${System.getProperty("os.version")}"
+        println("HTTP_BIND $context")
+        return try { block() } catch (failure: BindException) {
+            // Diagnostics only, not a fix: inspect immediately, before caller cleanup, without retries.
+            // Even stderr/proc failures must never replace the original BindException.
+            runCatching {
+                System.err.println("HTTP_BIND_FAILURE $context cause=$failure")
+                dumpTargetPort(port)
+            }
+            throw failure // No retry, delay, alternate port, or weakened assertion.
+        }
+    }
+
+    private fun dumpTargetPort(port: Int) {
+        // At most 49 evidence lines plus the failure line. Never dump unrelated connections.
+        var remaining = 49
+        fun emit(message: String) {
+            if (remaining > 0) {
+                remaining--
+                System.err.println(message)
+            }
+        }
+        if (port !in 1..65535) {
+            emit("HTTP_BIND_PROC skipped=no-concrete-target-port")
+            return
+        }
+        val target = port.toString(16).padStart(4, '0')
+        for (path in listOf("/proc/net/tcp", "/proc/net/tcp6")) {
+            if (remaining == 0) break
+            var matches = 0
+            try {
+                File(path).bufferedReader().use { reader ->
+                    reader.readLine() // Header, not connection evidence.
+                    while (remaining > 1) {
+                        val line = reader.readLine() ?: break
+                        val fields = line.trim().split(Regex("\\s+"), limit = 4)
+                        // Include either endpoint to retain target-port TIME_WAIT evidence too.
+                        if (fields.size >= 3 && listOf(fields[1], fields[2]).any {
+                                it.substringAfterLast(':').equals(target, ignoreCase = true)
+                            }) {
+                            emit("HTTP_BIND_PROC source=$path targetPort=$port row=${line.trim()}")
+                            matches++
+                        }
+                    }
+                }
+                emit("HTTP_BIND_PROC source=$path targetPort=$port matches=$matches " +
+                    "scan=${if (remaining <= 1) "capped" else "complete"}")
+            } catch (e: Exception) {
+                // Exception type only: do not dump arbitrary command output or exception contents.
+                emit("HTTP_BIND_PROC source=$path unavailable=${e.javaClass.simpleName}")
+            }
+        }
+    }
+
 }

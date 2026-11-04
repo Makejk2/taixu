@@ -78,7 +78,14 @@ class ToolRegistry(
         return (base.filter { remote -> locals.none { it.id == remote.id } } + locals)
     }
 
-    suspend fun updateSigned(request: SignedRegistryRequest): AppResult<Int> = withContext(Dispatchers.IO) {
+    private val registryUpdates = kotlinx.coroutines.sync.Mutex()
+    suspend fun updateSigned(request: SignedRegistryRequest,
+        authorize: suspend () -> Boolean = { true }): AppResult<Int> = withContext(Dispatchers.IO) {
+        registryUpdates.lock()
+        try { updateSignedLocked(request,authorize) } finally { registryUpdates.unlock() }
+    }
+    private suspend fun updateSignedLocked(request: SignedRegistryRequest,
+        authorize: suspend () -> Boolean): AppResult<Int> {
         try {
             require(request.manifestUrl.startsWith("https://", ignoreCase = true)) { "工具清单必须使用 HTTPS" }
             require(request.signatureUrl.startsWith("https://", ignoreCase = true)) { "签名地址必须使用 HTTPS" }
@@ -102,9 +109,12 @@ class ToolRegistry(
             check(parent.exists() || parent.mkdirs()) { "无法创建 Registry 目录" }
             val staging = File(parent, "tools.json.part")
             staging.writeBytes(manifestBytes)
+            currentCoroutineContext().ensureActive()
+            check(authorize()) { "目录更新原生授权或配置已改变" }
             commitPersistedRegistry(staging)
             AppResult.Success(manifests.size)
-        } catch (throwable: Throwable) {
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (throwable: Throwable) {
             AppResult.Failure(
                 AppError(
                     code = if (throwable is SecurityException) ErrorCode.SECURITY else ErrorCode.NETWORK,
@@ -208,6 +218,9 @@ class ToolRegistry(
         onProgress: (LocalPluginImportProgress) -> Unit = {},
         expected: ToolManifest? = null,
         execution: String = "PROCESS",
+        expectedSelectedDigest: String? = null,
+        requireSelectionCas: Boolean = false,
+        authorize: suspend () -> Boolean = { true },
     ): AppResult<ToolManifest> = withContext(Dispatchers.IO) {
         try {
             AppResult.Success(localStore.import(
@@ -216,12 +229,41 @@ class ToolRegistry(
                 validateCandidate = { requireExecution(it, execution); validateCandidate(it) }, progress = onProgress,
                 maximumBytes = if (execution == "WEB") WebPluginPackagePolicy.MAX_ARCHIVE_BYTES else LocalPluginArchive.MAX_BYTES,
                 maximumEntries = if (execution == "WEB") WebPluginPackagePolicy.MAX_ARCHIVE_ENTRIES else LocalPluginArchive.MAX_ENTRIES,
+                expectedSelectedDigest = expectedSelectedDigest, requireSelectionCas = requireSelectionCas,
+                authorize = authorize,
             ))
         } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
         catch (failure: Exception) {
             AppResult.Failure(AppError(ErrorCode.SECURITY, "本地插件导入失败：${failure.message.orEmpty()}", failure))
         }
     }
+
+    /** Native private staging inspection. Manifest review is NOT payload verification; the
+     * immutable importer validates every payload hash again before committing selection. */
+    suspend fun inspectReviewedStream(input: InputStream, execution: String, maximumBytes: Long): ToolManifest =
+        withContext(Dispatchers.IO) {
+            val operation = currentCoroutineContext()
+            val text = LocalPluginArchive.inspect(input, { operation.ensureActive() },
+                maximumBytes = maximumBytes,
+                maximumEntries = if (execution == "WEB") WebPluginPackagePolicy.MAX_ARCHIVE_ENTRIES else LocalPluginArchive.MAX_ENTRIES)
+            val manifest = top.wkbin.taixu.plugin.packages.PluginPackageProtocol.decode(text)
+                .copy(source = "LOCAL", offlineOnly = true, installMethod = "LOCAL_PACKAGE")
+            ToolManifestValidator.validateAll(listOf(manifest))
+            requireExecution(manifest, execution)
+            validateCandidate(manifest)
+            manifest
+        }
+
+    /** Native private staging stream only; importer never resolves a model-supplied URI/path. */
+    suspend fun importReviewedStream(open: () -> InputStream, size: Long, expected: ToolManifest,
+        execution: String, selectedDigest: String?, authorize: suspend () -> Boolean): ToolManifest =
+        withContext(Dispatchers.IO) {
+            localStore.import(input = open, total = size, expected = expected,
+                validateCandidate = { requireExecution(it, execution); validateCandidate(it) }, progress = {},
+                maximumBytes = if (execution == "WEB") WebPluginPackagePolicy.MAX_ARCHIVE_BYTES else LocalPluginArchive.MAX_BYTES,
+                maximumEntries = if (execution == "WEB") WebPluginPackagePolicy.MAX_ARCHIVE_ENTRIES else LocalPluginArchive.MAX_ENTRIES,
+                expectedSelectedDigest = selectedDigest, requireSelectionCas = true, authorize = authorize)
+        }
 
     suspend fun removeWebPackage(expected: ToolManifest) = withContext(Dispatchers.IO) { localStore.removeWeb(expected) }
 

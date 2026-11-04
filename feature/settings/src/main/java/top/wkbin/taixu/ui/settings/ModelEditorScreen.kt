@@ -107,6 +107,7 @@ fun ModelEditorScreen(
     onBack: () -> Unit,
     onSaved: () -> Unit,
     viewModel: SettingsViewModel? = previewOrNull { koinViewModel() },
+    nativeRequestId: String? = null,
 ) {
     val models by viewModel?.models?.collectAsStateWithLifecycle() ?: previewStateOf(emptyList())
     val discovered by viewModel?.discoveredModels?.collectAsStateWithLifecycle() ?: previewStateOf(emptyList())
@@ -117,6 +118,11 @@ fun ModelEditorScreen(
     val existing = models.firstOrNull { it.id == modelId }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    var saveInProgress by remember { mutableStateOf(false) }
+    val nativeCoordinator = if (nativeRequestId != null) org.koin.compose.koinInject<top.wkbin.taixu.harness.admin.model.NativeModelEditorRequests>() else null
+    val nativeBridge = if (nativeRequestId != null) org.koin.compose.koinInject<top.wkbin.taixu.harness.admin.model.ModelNativeFormBridge>() else null
+    val nativeQueue = if (nativeRequestId != null) org.koin.compose.koinInject<top.wkbin.taixu.harness.admin.nativeui.NativeManagementQueue>() else null
+
 
     var initialApiKey by remember(modelId) { mutableStateOf("") }
     LaunchedEffect(modelId, existing?.secretRef) {
@@ -135,13 +141,70 @@ fun ModelEditorScreen(
     }
 
     var showImportJsonDialog by rememberSaveable { mutableStateOf(false) }
+    val formRequest = nativeCoordinator?.current?.value?.takeIf { it.requestId == nativeRequestId }
+    fun cancelNativeAndBack() {
+        if (nativeRequestId == null) { onBack(); return }
+        if (saveInProgress) return
+        coroutineScope.launch {
+            try {
+                val current = requireNotNull(formRequest)
+                nativeBridge?.cancelFromNative(current.sourceSessionId, nativeRequestId)
+                nativeQueue?.finishModelFromNative(nativeRequestId, top.wkbin.taixu.harness.admin.nativeui.ManagementState.CANCELLED)
+                nativeCoordinator?.clearFromNative(nativeRequestId)
+                onBack()
+            } catch (_: Exception) { Toast.makeText(context,"当前结果需核对，不能伪报取消。",Toast.LENGTH_LONG).show() }
+        }
+    }
+    suspend fun syncNativeFailure() {
+        val id = nativeRequestId ?: return
+        val source = nativeCoordinator?.current?.value?.sourceSessionId ?: return
+        val state = nativeBridge?.status(source,id)?.state ?: return
+        val projected = when(state) {
+            top.wkbin.taixu.harness.admin.model.ModelNativeFormState.UNKNOWN_PARTIAL -> top.wkbin.taixu.harness.admin.nativeui.ManagementState.UNKNOWN_PARTIAL
+            top.wkbin.taixu.harness.admin.model.ModelNativeFormState.EXPIRED -> top.wkbin.taixu.harness.admin.nativeui.ManagementState.EXPIRED
+            top.wkbin.taixu.harness.admin.model.ModelNativeFormState.CANCELLED -> top.wkbin.taixu.harness.admin.nativeui.ManagementState.CANCELLED
+            else -> null
+        }
+        if (projected != null) {
+            nativeQueue?.finishModelFromNative(id,projected)
+            nativeCoordinator?.clearFromNative(id)
+        }
+    }
+    if (nativeRequestId != null) androidx.activity.compose.BackHandler { cancelNativeAndBack() }
+    if (formRequest?.operation == top.wkbin.taixu.harness.admin.model.ModelNativeFormOperation.DELETE) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { cancelNativeAndBack() },
+            title = { Text("删除模型档案") },
+            text = { Text("删除当前选定档案。其默认引用会按原生规则调整；正在进行的请求所用凭据需待安全清理，不表示密钥已经清除。此操作不会向AI返回凭据。") },
+            confirmButton = { androidx.compose.material3.TextButton(enabled = !saveInProgress, onClick = {
+                coroutineScope.launch {
+                    saveInProgress = true
+                    try {
+                        val result = requireNotNull(nativeBridge).submitFromNative(requireNotNull(nativeRequestId)) {
+                            requireNotNull(viewModel).deleteModelFromNative(requireNotNull(modelId))
+                        }
+                        check(result.state == top.wkbin.taixu.harness.admin.model.ModelNativeFormState.APPLIED)
+                        nativeQueue?.finishModelFromNative(nativeRequestId,top.wkbin.taixu.harness.admin.nativeui.ManagementState.APPLIED)
+                        nativeCoordinator?.clearFromNative(nativeRequestId);onSaved()
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                    catch (_: Exception) {
+                        runCatching { syncNativeFailure() }
+                        Toast.makeText(context,"删除结果尚未确认，请核对档案。",Toast.LENGTH_LONG).show()
+                    }
+                    finally { saveInProgress = false }
+                }
+            }) { Text("确认删除") } },
+            dismissButton = { androidx.compose.material3.TextButton(enabled = !saveInProgress,onClick = { cancelNativeAndBack() }) { Text("取消") } },
+        )
+        return
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             RuntimeTopBar(
                 title = if (existing == null) "新增模型档案" else "编辑模型档案",
-                onBack = onBack,
+                onBack = { cancelNativeAndBack() },
                 actions = {
                     RuntimeIconButton(
                         onClick = { showImportJsonDialog = true },
@@ -171,7 +234,11 @@ fun ModelEditorScreen(
             discover = { provider, url, key -> viewModel?.discoverModels(provider, url, key) },
             test = { url, model, key, respApi, providerId -> viewModel?.testConnection(url, model, key, respApi, providerId) },
             save = { name, provider, modelsList, url, key, rpmLimit, temperature, maxTokens, topP, reasoningMode, reasoningEffort, toolCallMode, contextTokens, compactionKeepRecent, compactionReserve, customHeaders, pureChatMode, visionEnabled, imageGenerationEnabled, responseApiEnabled, promptCachingEnabled, promptCacheTtl1h ->
-                val saved = viewModel?.saveModels(
+                if (!saveInProgress) coroutineScope.launch {
+                saveInProgress = true
+                try {
+                val save: suspend () -> Boolean = {
+                viewModel?.saveModels(
                     id = modelId,
                     models = modelsList,
                     name = name,
@@ -195,8 +262,29 @@ fun ModelEditorScreen(
                     responseApiEnabled = responseApiEnabled,
                     promptCachingEnabled = promptCachingEnabled,
                     promptCacheTtl1h = promptCacheTtl1h,
-                )
-                if (saved == true) onSaved()
+                ) == true
+                }
+                if (nativeRequestId == null) {
+                    if (save()) onSaved()
+                } else {
+                    val request = requireNotNull(nativeCoordinator?.current?.value)
+                    require(request.requestId == nativeRequestId && request.modelId == modelId)
+                    require(request.operation != top.wkbin.taixu.harness.admin.model.ModelNativeFormOperation.DELETE)
+                    val state = requireNotNull(nativeBridge).submitFromNative(nativeRequestId) {
+                        check(save()) { "MODEL_NATIVE_SAVE_NOT_CONFIRMED" }
+                    }
+                    if (state.state == top.wkbin.taixu.harness.admin.model.ModelNativeFormState.APPLIED) {
+                        nativeQueue?.finishModelFromNative(nativeRequestId, top.wkbin.taixu.harness.admin.nativeui.ManagementState.APPLIED)
+                        nativeCoordinator?.clearFromNative(nativeRequestId)
+                        onSaved()
+                    }
+                }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+                catch (_: Exception) {
+                    runCatching { syncNativeFailure() }
+                    Toast.makeText(context, "保存结果尚未确认，请核对档案，不要重复提交。", Toast.LENGTH_LONG).show()
+                } finally { saveInProgress = false }
+                }
             },
             onFillFromJson = { jsonStr ->
                 val result = viewModel?.parseProfilesFromJson(jsonStr)

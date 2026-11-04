@@ -20,9 +20,14 @@ class ToolPackageOperations(private val repository: ToolRepository, private val 
         action()
     }
 
-    suspend fun <T> install(distro: String, id: String, expected: ToolManifest? = null, action: suspend (ToolManifest) -> T): T = operations.withLock {
+    suspend fun <T> install(distro: String, id: String, expected: ToolManifest? = null, expectedState: ApprovedPackageState? = null, authorize: suspend () -> Boolean = { true }, action: suspend (ToolManifest) -> T): T = operations.withLock {
         val manifest = requireNotNull(repository.manifest(id)) { "工具清单不存在" }
         require(expected == null || manifest == expected) { "已确认的插件清单已变化，请重新导入确认" }
+        val row = repository.findById(distro, id)
+        check(expectedState == null || expectedState == ApprovedPackageState(row?.installedVersion, row?.state)) {
+            "插件安装状态已变化，请重新批准"
+        }
+        check(authorize()) { "原生管理授权已失效" }
         val installed = installed(distro)
         val previous = installed.find { it.toolId == id }
         if (manifest.schemaVersion == 2 && previous != null && !previous.pluginId.startsWith("legacy.")) {
@@ -35,10 +40,16 @@ class ToolPackageOperations(private val repository: ToolRepository, private val 
         action(manifest)
     }
 
-    suspend fun <T> uninstall(distro: String, id: String, action: suspend (ToolManifest) -> T): T = operations.withLock {
+    suspend fun <T> uninstall(distro: String, id: String, expected: ToolManifest? = null, expectedState: ApprovedPackageState? = null, authorize: suspend () -> Boolean = { true }, action: suspend (ToolManifest) -> T): T = operations.withLock {
+        val row = repository.findById(distro, id)
+        check(expectedState == null || expectedState == ApprovedPackageState(row?.installedVersion, row?.state)) {
+            "插件安装状态已变化，请重新批准"
+        }
+        check(authorize()) { "原生管理授权已失效" }
         val installed = installed(distro)
         PackageInstallPolicy.requireUninstall(id, installed)
         val manifest = requireNotNull(runtimeManifest(distro, id))
+        check(expected == null || manifest == expected) { "已批准的安装版本已变化，请重新提案" }
         // Use the installed receipt to preserve v2 framework-only uninstall after selecting another version.
         val receipt = installed.find { it.toolId == id }
         receipt?.let { hostGrants?.revokePlugin(distro, it.pluginId) }

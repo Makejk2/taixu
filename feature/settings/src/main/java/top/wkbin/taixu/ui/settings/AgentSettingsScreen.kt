@@ -200,6 +200,11 @@ fun AgentSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             if (category == AgentSettingsCategory.EXECUTION) {
+            item { ManagementRequestPanel(queue = koinInject<top.wkbin.taixu.harness.admin.nativeui.NativeManagementQueue>()) }
+            item { NativePackageImportPanel() }
+            item { NativeSessionClaimPanel() }
+            item { NativeCredentialCleanupPanel() }
+            item { NativeRuntimeImportPanel() }
             // ---- 模块 1：模型思考与交互表现 ----
             item {
                 SectionHeader(

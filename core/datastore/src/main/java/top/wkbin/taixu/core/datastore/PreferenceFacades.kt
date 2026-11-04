@@ -278,6 +278,8 @@ class ProviderPreferences(private val store: SettingsDataStore) {
     suspend fun setModelApiKeys(secretRef: String, values: List<String>) = store.setModelApiKeys(secretRef, values)
     suspend fun readModelApiKeys(secretRef: String): List<String> = store.readModelApiKeys(secretRef)
     suspend fun removeModelApiKey(secretRef: String) = store.removeModelApiKey(secretRef)
+    suspend fun retireModelApiKey(secretRef: String) = store.markCredentialRetirement(secretRef)
+    suspend fun eraseRetiredModelKeys(referenced: Set<String>) = store.eraseRetiredModelKeys(referenced)
 }
 
 class BrowserPreferences(private val store: SettingsDataStore) {

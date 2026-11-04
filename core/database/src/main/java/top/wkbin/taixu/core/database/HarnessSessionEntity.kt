@@ -38,7 +38,7 @@ data class HarnessSessionEntity(
 )
 
 @Dao
-interface HarnessSessionDao {
+interface HarnessSessionDao : SessionManagementDao {
     @Query("UPDATE harness_sessions SET executionTargetJson = :target WHERE id = :id AND (executionTargetJson IS NULL OR executionTargetJson = 'unbound')")
     suspend fun bindExecutionTargetIfAbsent(id: String, target: String)
 
@@ -94,8 +94,27 @@ interface HarnessSessionDao {
     @Query("DELETE FROM bot_assignments WHERE sessionId = :id")
     suspend fun deleteBotAssignments(id: String)
 
+    @Query("UPDATE team_communication_messages SET state='cancelled', holdReason='session_deleted' " +
+        "WHERE state IN ('held','queued') AND (sourceAssignmentId IN (SELECT id FROM bot_assignments WHERE sessionId=:id) " +
+        "OR targetAssignmentId IN (SELECT id FROM bot_assignments WHERE sessionId=:id))")
+    suspend fun cancelCommunicationsForSession(id: String)
+
+    @Query("UPDATE bot_assignment_requests SET status='cancelled' WHERE status='pending' AND id IN " +
+        "(SELECT id FROM team_communication_messages WHERE sourceAssignmentId IN " +
+        "(SELECT id FROM bot_assignments WHERE sessionId=:id) OR targetAssignmentId IN " +
+        "(SELECT id FROM bot_assignments WHERE sessionId=:id))")
+    suspend fun cancelUnclaimedCommunicationsForSession(id: String)
+
     @androidx.room.Transaction
     suspend fun deleteSession(id: String) {
+        val fence = managementFence(id)
+        if (fence != null && fence.mode != 0) {
+            val lease = kotlinx.coroutines.currentCoroutineContext()[SessionDeletionLease]
+            check(lease?.id == id && lease.token == fence.ownerToken &&
+                authorizeManagement(id, lease.token, 3) == 1) { "SESSION_RESERVED" }
+        }
+        cancelCommunicationsForSession(id)
+        cancelUnclaimedCommunicationsForSession(id)
         deleteBotAssignments(id)
         deleteBotGroupSession(id)
         deleteSessionRow(id)

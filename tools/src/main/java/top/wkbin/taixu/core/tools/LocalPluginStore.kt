@@ -14,6 +14,7 @@ import top.wkbin.taixu.plugin.packages.SemanticVersion
 /** Immutable version directories plus an atomic selection pointer. Import never runs code. */
 internal class LocalPluginStore(private val root: File, private val cache: File) {
     private val mutations = Mutex()
+    private val json = kotlinx.serialization.json.Json
 
     fun load(): List<ToolManifest> = root.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull(::selected)
 
@@ -31,6 +32,9 @@ internal class LocalPluginStore(private val root: File, private val cache: File)
         progress: (LocalPluginImportProgress) -> Unit,
         maximumBytes: Long = LocalPluginArchive.MAX_BYTES,
         maximumEntries: Int = LocalPluginArchive.MAX_ENTRIES,
+        expectedSelectedDigest: String? = null,
+        requireSelectionCas: Boolean = false,
+        authorize: suspend () -> Boolean = { true },
     ): ToolManifest = mutations.withLock {
         check(cache.mkdirs() || cache.isDirectory)
         val staging = File(cache, "txplugin-${java.util.UUID.randomUUID()}")
@@ -42,6 +46,14 @@ internal class LocalPluginStore(private val root: File, private val cache: File)
             operation.ensureActive()
             require(expected == null || manifest == expected) { "插件清单已变化，请重新预览并确认" }
             validateCandidate(manifest)
+            if (requireSelectionCas) {
+                val selectedNow = selected(versionDirectory(manifest.id, manifest.version).parentFile!!)
+                val actual = selectedNow?.let { java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(json.encodeToString(ToolManifest.serializer(), it).toByteArray(Charsets.UTF_8))
+                    .joinToString("") { b -> "%02x".format(b.toInt() and 255) } }
+                check(actual == expectedSelectedDigest) { "插件选中版本已改变，请重新批准" }
+            }
+            check(authorize()) { "原生管理授权已失效" }
             val destination = versionDirectory(manifest.id, manifest.version)
             if (destination.exists()) {
                 val existing = readVersion(destination)

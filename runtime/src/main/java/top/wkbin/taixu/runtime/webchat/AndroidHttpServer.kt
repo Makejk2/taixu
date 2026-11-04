@@ -36,26 +36,31 @@ internal class AndroidHttpServer private constructor(
 ) {
     private val contexts = ConcurrentHashMap<String, AndroidHttpHandler>()
 
-    /** 已 accept 且尚未关闭的连接，用于 [stop] 时回收 SSE 这类长连接。 */
-    private val activeSockets = ConcurrentHashMap.newKeySet<Socket>()
-    private var serverSocket: ServerSocket? = null
+    /** Each generation owns its listener, connections and default executor. */
+    private class State {
+        val acceptBarrier = HttpAcceptBarrier()
+        var listener: ServerSocket? = null
+        val sockets = ConcurrentHashMap.newKeySet<Socket>()
+        var ownedExecutor: ExecutorService? = null
+        var executor: Executor? = null
+        @Volatile var stopping = false
+    }
 
-    @Volatile
-    private var running = false
-
+    private var state: State? = null
     private var externalExecutor: Executor? = null
-    private var ownedExecutor: ExecutorService? = null
 
-    /**
-     * 工作线程池。默认由本类懒创建并在 [stop] 中回收；一旦外部注入，
-     * 关闭责任随之转移给注入方（本类只会释放自己创建的那个）。
-     */
+    /** Externally supplied executors remain the caller's responsibility. */
     var executor: Executor
-        get() = currentExecutor()
-        set(value) = synchronized(this) {
-            ownedExecutor?.shutdownNow()
-            ownedExecutor = null
-            externalExecutor = value
+        get() = synchronized(this) { executorFor(state ?: State().also { state = it }) }
+        set(value) {
+            val previous = synchronized(this) {
+                externalExecutor = value
+                state?.let { generation ->
+                    generation.executor = value
+                    generation.ownedExecutor.also { generation.ownedExecutor = null }
+                }
+            }
+            previous?.shutdownNow()
         }
 
     fun createContext(path: String, handler: AndroidHttpHandler) {
@@ -65,40 +70,46 @@ internal class AndroidHttpServer private constructor(
 
     @Synchronized
     fun start() {
-        if (running) return
-        val socket = ServerSocket().apply {
-            reuseAddress = true
-            bind(address, backlog.coerceAtLeast(DEFAULT_BACKLOG))
+        if (state?.listener != null) return
+        val listener = ServerSocket()
+        try {
+            listener.reuseAddress = true
+            listener.bind(address, backlog.coerceAtLeast(DEFAULT_BACKLOG))
+        } catch (failure: Exception) {
+            runCatching { listener.close() }
+            throw failure
         }
-        serverSocket = socket
-        running = true
-        Thread({ acceptConnections(socket) }, "taixu-webchat-accept").apply {
+        val generation = state ?: State().also { state = it }
+        generation.listener = listener
+        Thread({ acceptConnections(generation, listener) }, "taixu-webchat-accept").apply {
             isDaemon = true
             start()
         }
     }
 
-    @Synchronized
+    @Suppress("UNUSED_PARAMETER")
     fun stop(delaySeconds: Int) {
-        running = false
-        runCatching { serverSocket?.close() }
-        serverSocket = null
-        // 已 accept 的连接不会随监听 socket 一起关闭：SSE 流可以挂住工作线程与 fd。
-        activeSockets.forEach { runCatching { it.close() } }
-        activeSockets.clear()
-        ownedExecutor?.shutdownNow()
-        ownedExecutor = null
-        if (delaySeconds > 0) {
-            // The WebChat caller always requests an immediate stop. The argument
-            // is kept to mirror the old API and make that intent explicit.
+        val retired = synchronized(this) {
+            val generation = state ?: return
+            generation.stopping = true
+            generation.acceptBarrier.retire()
+            state = null
+            // Close before a new start may bind, but never join or run handlers here.
+            runCatching { generation.listener?.close() }
+            generation
         }
+        // Registration is revoked; only this generation can be cleaned up now.
+        retired.sockets.forEach { runCatching { it.close() } }
+        retired.sockets.clear()
+        retired.ownedExecutor?.shutdownNow()
+        // Await only native accept return, outside server monitor and outside handler execution.
+        retired.acceptBarrier.awaitReleased()
     }
 
-    private fun currentExecutor(): Executor = synchronized(this) {
-        externalExecutor
-            ?: ownedExecutor?.takeIf { !it.isShutdown }
-            ?: createOwnedExecutor().also { ownedExecutor = it }
-    }
+    /** Called only while holding this server's monitor, never by a stale accept. */
+    private fun executorFor(generation: State): Executor = generation.executor
+        ?: (externalExecutor ?: createOwnedExecutor().also { generation.ownedExecutor = it })
+            .also { generation.executor = it }
 
     /**
      * 缺省线程池：并发上限与旧的 `newFixedThreadPool(8)` 一致，但核心线程允许超时回收
@@ -113,31 +124,42 @@ internal class AndroidHttpServer private constructor(
     ) { runnable -> Thread(runnable, "taixu-webchat-worker").apply { isDaemon = true } }
         .apply { allowCoreThreadTimeOut(true) }
 
-    private fun acceptConnections(socket: ServerSocket) {
-        while (running) {
+    private fun acceptConnections(generation: State, listener: ServerSocket) {
+        while (!generation.stopping && !listener.isClosed) {
             try {
-                val client = socket.accept()
-                if (!running) {
+                val client = generation.acceptBarrier.accept { listener.accept() } ?: break
+                val target = synchronized(this) {
+                    if (state !== generation || generation.stopping || listener.isClosed) null
+                    else {
+                        generation.sockets.add(client)
+                        executorFor(generation)
+                    }
+                }
+                if (target == null) {
                     runCatching { client.close() }
                     break
                 }
-                activeSockets.add(client)
                 try {
-                    currentExecutor().execute { handleClient(client) }
+                    // Direct executors may enter user handlers: never execute under our lock.
+                    target.execute {
+                        if (generation.stopping) {
+                            runCatching { client.close() }
+                            generation.sockets.remove(client)
+                        } else handleClient(generation, client)
+                    }
                 } catch (_: RejectedExecutionException) {
-                    activeSockets.remove(client)
+                    generation.sockets.remove(client)
                     runCatching { client.close() }
                 }
             } catch (_: SocketException) {
-                if (running) continue
-                break
+                if (listener.isClosed || generation.stopping) break
             } catch (_: Exception) {
-                if (!running) break
+                if (listener.isClosed || generation.stopping) break
             }
         }
     }
 
-    private fun handleClient(socket: Socket) {
+    private fun handleClient(generation: State, socket: Socket) {
         try {
             socket.soTimeout = READ_TIMEOUT_MS
             val input = BufferedInputStream(socket.getInputStream())
@@ -201,14 +223,14 @@ internal class AndroidHttpServer private constructor(
                 requestHeaders = headers,
                 requestBody = ByteArrayInputStream(body, 0, offset),
                 // 异步 handler 在协程里晚于本方法关闭连接，靠回调而不是轮询摘除。
-                onClose = { activeSockets.remove(socket) },
+                onClose = { generation.sockets.remove(socket) },
             )
             handler.handle(exchange)
         } catch (_: Exception) {
             runCatching { socket.close() }
         } finally {
             // 覆盖未走到 exchange 的早退路径（400/404/431/413 与读取异常）。
-            if (socket.isClosed) activeSockets.remove(socket)
+            if (socket.isClosed) generation.sockets.remove(socket)
         }
     }
 

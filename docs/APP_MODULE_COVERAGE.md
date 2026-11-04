@@ -112,8 +112,8 @@ AppModulesToolBackend(directory).execute(args: JsonObject): Pair<Boolean, String
 | `mcp`, `mcp:<id>` | Enabled configured service IDs only | `enabled_uninspected`; no tool IDs, cache guesses, discovery or connection |
 | `model_management` | UI-only / unsupported | No dedicated model/API-key CRUD conversation adapter |
 | `session_management` | UI-only / unsupported | History tools are not full session lifecycle management |
-| `workflow_management` | UI-only / unsupported | Workflow nodes/plugins are not a dedicated workflow-management API |
-| `bot_management` | UI-only / unsupported | Bot UI/runtime existence does not expose Bot CRUD here |
+| `workflow_management` | `app_config(module=workflow)` partial | Native-approved CAS save/delete, static safe run/stop/status; bound local Bash/Process/Build being integrated; Agent/Host/plugin remain pending |
+| `bot_management` | `team` partial | Persistent team/member creation, drafts/review rules/publication, independent start/status/stop; not arbitrary persona CRUD |
 | `git_management` | UI-only / unsupported | Shell git is possible under its own contract, not a dedicated module API |
 | `browser_management` | UI-only / unsupported | Browser UI is not declared supported by search/download |
 | `terminal_ui` | UI-only / unsupported | base/process are not terminal-tab management |

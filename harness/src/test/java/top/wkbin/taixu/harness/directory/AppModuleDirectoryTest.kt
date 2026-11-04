@@ -39,6 +39,15 @@ class AppModuleDirectoryTest {
         module?.let { put("module", it) }
     }
 
+    @Test fun actualManagementBindingsAreReferencesNotFullCoverageClaims() = runBlocking {
+        val directory = AppModuleDirectory(visibleNativeToolNames = { setOf("app_config", "team") })
+        val snapshot = directory.modules()
+        assertEquals(listOf("app_config"), snapshot.module("workflow_management").ids())
+        assertEquals(listOf("team"), snapshot.module("bot_management").ids())
+        assertEquals("partial_tool_surface_not_full_module_api", snapshot.module("workflow_management").field("reason"))
+        assertEquals("unsupported", snapshot.module("model_management").field("status"))
+    }
+
     @Test fun missingBindingsFailClosed() = runBlocking {
         val result = AppModuleDirectory(nativeDefinitions = { listOf(definition("read")) }).modules()
         listOf("native", "host", "plugins", "mcp", "model_management").forEach {
@@ -113,7 +122,14 @@ class AppModuleDirectoryTest {
         val plugin = directory.inspectModule("plugin:test.safe").module("plugin:test.safe")
         assertEquals(listOf("ping"), plugin.ids())
         assertEquals("plugin.test.safe", plugin.field("server"))
-        assertEquals("unknown", plugin["tools"]!!.jsonArray.single().jsonObject.field("schemaStatus"))
+        // 已提供结构化快照：schema 视为已验证。
+        assertEquals("known", plugin["tools"]!!.jsonArray.single().jsonObject.field("schemaStatus"))
+        // 未提供快照时必须退回 unknown —— 目录不得自行探测或解析插件描述。
+        val noSnapshot = AppModuleDirectory(visibleNativeToolNames = { setOf("use_capability") },
+            registeredPluginsSnapshot = { listOf(AppModuleDirectory.RegisteredPlugin.fromRegisteredDescriptor(descriptor)) },
+            nativeDefinitions = { listOf(definition("use_capability")) })
+        assertEquals("unknown", noSnapshot.inspectModule("plugin:test.safe")
+            .module("plugin:test.safe")["tools"]!!.jsonArray.single().jsonObject.field("schemaStatus"))
         assertEquals(0, executions)
         assertFalse(plugin.toString().contains("secret description"))
     }

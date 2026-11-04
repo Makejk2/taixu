@@ -144,6 +144,12 @@ val appModule = module {
     single<Json> { provideJson() }
 
     single<AppDatabase> { provideDatabase(context = get()) }
+    single<top.wkbin.taixu.core.database.SessionManagementPersistence> { top.wkbin.taixu.core.database.RoomSessionManagementPersistence(get<AppDatabase>().harnessSessionDao()) }
+    single<top.wkbin.taixu.harness.admin.NativeSessionOwnership> { top.wkbin.taixu.harness.admin.NativeSessionOwnership { id -> get<AppDatabase>().harnessSessionDao().isExplicitlyClaimed(id) } }
+
+    single<top.wkbin.taixu.core.database.ModelManagementRepository> { top.wkbin.taixu.core.database.RoomModelManagementRepository(get<AppDatabase>().aiModelDao()) }
+    single<top.wkbin.taixu.core.database.UserRuleRepository> { top.wkbin.taixu.core.database.RoomUserRuleRepository(get<AppDatabase>().userRuleDao()) }
+    single<top.wkbin.taixu.core.database.TeamSuggestionRepository> { top.wkbin.taixu.core.database.RoomTeamSuggestionRepository(get<AppDatabase>().teamSuggestionDao()) }
 
     single<ToolDao> { provideToolDao(database = get()) }
 

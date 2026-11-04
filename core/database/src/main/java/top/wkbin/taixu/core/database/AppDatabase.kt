@@ -7,6 +7,18 @@ import top.wkbin.taixu.core.database.task.AgentTaskDao
 
 @Database(
     entities = [
+        SessionManagementFenceEntity::class,
+        SessionManagementClaimEntity::class,
+        UserManagementRule::class,
+        UserRuleCallReceipt::class,
+        SkillDiscoveryTombstone::class,
+        WorkflowSourceAuthorization::class,
+        WorkflowNativeReviewEvent::class,
+        TeamGroupOwnerEntity::class,
+        TeamRootOwnerEntity::class,
+        TeamSuggestionEntity::class,
+        TeamCommunicationPolicyEntity::class,
+        TeamCommunicationEntity::class,
         ToolEntity::class,
         InstallLogEntity::class,
         InstallTaskEntity::class,
@@ -71,10 +83,12 @@ import top.wkbin.taixu.core.database.task.AgentTaskDao
         BtwQueryEntity::class,
         AgentMessageFeedbackEntity::class,
     ],
-    version = 85,
+    version = 88,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
+    abstract fun teamSuggestionDao(): TeamSuggestionDao
+    abstract fun userRuleDao(): UserRuleDao
     abstract fun toolDao(): ToolDao
     abstract fun installLogDao(): InstallLogDao
     abstract fun installTaskDao(): InstallTaskDao

@@ -111,6 +111,13 @@ fun TaiXuNavHost(
     fun NavBackStack<NavKey>.pushRaw(destination: NavKey) {
         if (lastOrNull() != destination) add(destination)
     }
+    val managementEditor = koinInject<top.wkbin.taixu.harness.admin.model.NativeModelEditorRequests>()
+    val managementRequest by managementEditor.current.collectAsStateWithLifecycle()
+    LaunchedEffect(managementRequest?.requestId) {
+        managementRequest?.let { request ->
+            activeStack.pushRaw(ModelEditorDestination(request.modelId, request.requestId))
+        }
+    }
     val sidebarGesturesEnabled = activeStack.canSwipeOpenNavigation()
     LaunchedEffect(sidebarGesturesEnabled) { if (!sidebarGesturesEnabled) showNavigation = false }
     val selectedMain = activeStack.lastOrNull { it == HomeDestination || it == WorkspaceDestination || it == BotsDestination || it == SettingsDestination }.toMainDestination()
@@ -611,6 +618,7 @@ fun TaiXuNavHost(
                 GuardedEntry(destination) {
                     ModelEditorScreen(
                         modelId = destination.modelId,
+                        nativeRequestId = destination.nativeRequestId,
                         onBack = ::popBack,
                         onSaved = ::popBack,
                         viewModel = settingsViewModel,

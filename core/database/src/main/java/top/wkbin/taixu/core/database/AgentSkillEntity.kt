@@ -42,11 +42,58 @@ interface AgentSkillDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(skill: AgentSkillEntity)
 
+    @androidx.room.Transaction
+    suspend fun applyDirectorySync(expected: List<AgentSkillEntity>, additions: List<AgentSkillEntity>, removals: List<String>) {
+        check(observeAll().first().associateBy { it.id } == expected.associateBy { it.id }) { "技能注册在同步期间发生变化" }
+        additions.forEach { row -> check(findById(row.id) == null); upsert(row) }
+        removals.forEach { id ->
+            check(expected.single { it.id == id }.isBuiltin.not())
+            deleteCustomRow(id) // Discovery normalization is not a user deletion/tombstone.
+        }
+    }
+
     @Query("UPDATE agent_skills SET isEnabled = :enabled WHERE id = :id AND isImmutable = 0")
     suspend fun setEnabled(id: String, enabled: Boolean)
 
     @Query("DELETE FROM agent_skills WHERE id = :id AND isBuiltin = 0")
-    suspend fun deleteCustom(id: String)
+    suspend fun deleteCustomRow(id: String)
+    @androidx.room.Transaction
+    suspend fun deleteCustom(id: String) {
+        val existing = findById(id) ?: return
+        require(!existing.isBuiltin && !existing.isImmutable)
+        existing.resourcePath?.let { rememberRemovedDirectory(SkillDiscoveryTombstone(it,System.currentTimeMillis())) }
+        deleteCustomRow(id)
+    }
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun rememberRemovedDirectory(row: SkillDiscoveryTombstone)
+    @Query("SELECT resourcePath FROM skill_discovery_tombstones")
+    suspend fun removedDirectories(): List<String>
+    @Query("DELETE FROM skill_discovery_tombstones WHERE resourcePath=:path")
+    suspend fun allowDirectory(path: String)
+    @Query("SELECT * FROM agent_skills WHERE id=:id")
+    suspend fun findById(id: String): AgentSkillEntity?
+    @androidx.room.Transaction
+    suspend fun replaceApproved(expected: AgentSkillEntity?, next: AgentSkillEntity): Boolean {
+        if (findById(next.id) != expected || expected?.isBuiltin == true || expected?.isImmutable == true) return false
+        require(!next.isBuiltin && !next.isImmutable)
+        upsert(next)
+        next.resourcePath?.let { allowDirectory(it) }
+        return true
+    }
+    @androidx.room.Transaction
+    suspend fun updateEnabledApproved(expected: AgentSkillEntity, enabled: Boolean): Boolean {
+        if (findById(expected.id) != expected || expected.isImmutable) return false
+        setEnabled(expected.id, enabled)
+        return true
+    }
+    @androidx.room.Transaction
+    suspend fun deleteApproved(expected: AgentSkillEntity): Boolean {
+        if (findById(expected.id) != expected || expected.isBuiltin) return false
+        expected.resourcePath?.let { rememberRemovedDirectory(SkillDiscoveryTombstone(it,System.currentTimeMillis())) }
+        deleteCustomRow(expected.id)
+        return true
+    }
 }
 
 /** 可自动发现 Skill 的宿主目录与其在 PRoot 沙箱内的挂载前缀（如 /attachments/skills）。 */
@@ -67,17 +114,34 @@ class AgentSkillRepository(
         dao.insertAll(BuiltinSkills.presets.map(AgentSkill::toEntity))
     }
 
-    suspend fun setEnabled(id: String, enabled: Boolean) {
+    suspend fun setEnabledApproved(expected: AgentSkill, enabled: Boolean, authorize: suspend () -> Boolean = { true }): Boolean = directorySyncMutex.withLock {
+        ensureInitialized()
+        check(authorize()) { "原生管理授权已失效" }
+        dao.updateEnabledApproved(expected.toEntity(), enabled)
+    }
+    suspend fun deleteApproved(expected: AgentSkill, authorize: suspend () -> Boolean = { true }): Boolean = directorySyncMutex.withLock {
+        ensureInitialized()
+        check(authorize()) { "原生管理授权已失效" }
+        dao.deleteApproved(expected.toEntity())
+    }
+
+    suspend fun replaceApproved(expected: AgentSkill?, next: AgentSkill, authorize: suspend () -> Boolean): Boolean = directorySyncMutex.withLock {
+        ensureInitialized()
+        check(authorize()) { "原生管理授权已失效" }
+        dao.replaceApproved(expected?.toEntity(),next.toEntity())
+    }
+
+    suspend fun setEnabled(id: String, enabled: Boolean) = directorySyncMutex.withLock {
         ensureInitialized()
         dao.setEnabled(id, enabled)
     }
 
-    suspend fun addCustom(skill: AgentSkill) {
+    suspend fun addCustom(skill: AgentSkill) = directorySyncMutex.withLock {
         ensureInitialized()
         dao.upsert(skill.toEntity())
     }
 
-    suspend fun deleteCustom(id: String) {
+    suspend fun deleteCustom(id: String) = directorySyncMutex.withLock {
         ensureInitialized()
         dao.deleteCustom(id)
     }
@@ -94,20 +158,26 @@ class AgentSkillRepository(
      *
      * @return 本次新注册的 Skill 列表
      */
-    suspend fun syncFromDirectories(roots: List<SkillScanRoot>): List<AgentSkill> = directorySyncMutex.withLock {
+    suspend fun syncFromDirectories(roots: List<SkillScanRoot>,
+        authorizeSnapshot: suspend () -> Boolean = { true }): List<AgentSkill> = directorySyncMutex.withLock {
         ensureInitialized()
         val existing = dao.observeAll().first()
+        val removedPaths = dao.removedDirectories().map { File(it).canonicalPath }.toSet()
         val knownPaths = existing.mapNotNull { it.resourcePath?.takeIf(String::isNotBlank) }
             .mapTo(mutableSetOf()) { stored ->
                 runCatching { File(stored).canonicalPath }.getOrDefault(stored)
             }
         val imported = mutableListOf<AgentSkill>()
+        val removals = mutableListOf<String>()
+        // Capture immutable prompt strings before any write; later filesystem edits do not
+        // become unreviewed database content inside this transaction.
         // 重叠扫描根也按父包优先处理；已有 ZIP 包的包装目录同样作为资源边界。
         roots.flatMap { root -> SkillDirectoryDiscovery.discover(root.hostDir).map { root to it } }
             .sortedBy { (_, prompt) -> prompt.canonicalFile.toPath().nameCount }
             .forEach { (root, promptFile) ->
                 val dir = promptFile.parentFile ?: return@forEach
                 val canonical = runCatching { dir.canonicalPath }.getOrNull() ?: return@forEach
+                if (removedPaths.any { canonical == it || isNestedPath(canonical,it) }) return@forEach
                 if (knownPaths.any { canonical == it || isNestedPath(canonical, it) && File(it).isDirectory }) return@forEach
                 val relative = dir.relativeTo(root.hostDir).invariantSeparatorsPath
                 val guestPath = root.guestPrefix.trimEnd('/') + if (relative.isEmpty()) "" else "/$relative"
@@ -119,16 +189,27 @@ class AgentSkillRepository(
             if (scannedPaths.any { path == it || isNestedPath(path, it) } &&
                 knownPaths.any { isNestedPath(path, it) && File(it).isDirectory }
             ) {
-                dao.deleteCustom(skill.id)
+                removals += skill.id
             }
         }
+        check(authorizeSnapshot()) { "技能目录快照或原生授权已变化" }
+        dao.applyDirectorySync(existing,imported.map { it.toEntity() },removals)
         imported
     }
 
     private fun isNestedPath(path: String, parent: String) = path.startsWith(parent + File.separator)
 
     private suspend fun registerDir(dir: File, promptFile: File, guestPath: String, knownPaths: MutableSet<String>, imported: MutableList<AgentSkill>) {
-        val markdown = runCatching { promptFile.readText().trim() }.getOrNull()
+        check(!java.nio.file.Files.isSymbolicLink(promptFile.toPath())) { "SKILL_PROMPT_LINK_REJECTED" }
+        val markdown = runCatching {
+            java.nio.file.Files.newInputStream(promptFile.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                .bufferedReader(Charsets.UTF_8).use { reader ->
+                    val text=StringBuilder();val buffer=CharArray(8192)
+                    while(true) { val n=reader.read(buffer);if(n<0)break
+                        require(text.length+n<=1_048_576) { "SKILL_PROMPT_TOO_LARGE" };text.append(buffer,0,n) }
+                    text.toString().trim()
+                }
+        }.getOrNull()
         if (markdown.isNullOrBlank()) return
         val metadata = parseFrontmatter(markdown)
         val skill = AgentSkill(
@@ -143,7 +224,6 @@ class AgentSkillRepository(
             category = "自定义",
             resourcePath = dir.absolutePath,
         )
-        dao.upsert(skill.toEntity())
         knownPaths += runCatching { dir.canonicalPath }.getOrDefault(dir.absolutePath)
         imported += skill
     }

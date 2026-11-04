@@ -60,4 +60,4 @@ fun teamApproval(args: JsonObject): ApprovalDecision =
         ApprovalDecision(true, "critical", "持久团队变更必须经过快照绑定的专用原生审批。", "团队变更")
     else ApprovalDecision(false)
 
-private val READS = setOf("list", "get", "status", "proposal")
+private val READS = setOf("list", "get", "status", "proposal", "suggestions")

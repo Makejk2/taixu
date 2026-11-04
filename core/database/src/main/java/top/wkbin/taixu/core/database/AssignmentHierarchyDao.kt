@@ -58,7 +58,10 @@ internal suspend fun BotAssignmentDao.cancelLiveDescendants(task: BotAssignmentE
     }
     descendants.asReversed().forEach { child ->
         if (child.status in setOf("QUEUED", "RUNNING", "WAITING_CHILDREN", "BLOCKED")) cancelTaskNode(child, now)
-        else cancelAssignmentRequests(child.id)
+        else {
+            cancelCommunicationsForAssignment(child.id)
+            cancelAssignmentRequests(child.id)
+        }
     }
 }
 
@@ -67,6 +70,7 @@ internal suspend fun BotAssignmentDao.cancelTaskNode(task: BotAssignmentEntity, 
         finish(task.id, "CANCELLED", now, null, "用户取消")
         return
     }
+    cancelCommunicationsForAssignment(task.id)
     cancelAssignmentRequests(task.id)
     if (task.status == "CANCELLED") return
     settleAssignment(task.id, "CANCELLED", now, task.summary, "用户取消")

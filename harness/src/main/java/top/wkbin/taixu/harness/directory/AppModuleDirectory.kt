@@ -34,9 +34,9 @@ class AppModuleDirectory(
     ) {
         companion object {
             /**
-             * Registry has no structured schema getter. Schemas may only come from the owning
-             * registered HarnessPlugin.tools snapshot; absent schemas remain explicitly unknown.
-             * Never parse registry.inspect(): it is truncated, human-readable text.
+             * Schemas may only come from the owning registered HarnessPlugin.tools snapshot
+             * (see HarnessPluginRegistry.registeredToolSchemas). Absent schemas stay explicitly
+             * unknown. Never parse registry.inspect(): it is truncated, human-readable text.
              */
             fun fromRegisteredDescriptor(
                 descriptor: PluginDescriptor,
@@ -59,9 +59,10 @@ class AppModuleDirectory(
         val reason: String,
         val tools: List<Tool> = emptyList(),
         val server: String? = null,
+        val managementRoute: String? = null,
     )
     private data class Tool(val id: String, val schema: JsonObject?)
-    private data class NativeModule(val id: String, val names: Set<String>)
+    private data class NativeModule(val id: String, val names: Set<String>, val route: String? = null)
 
     suspend fun modules(): JsonObject = envelope(snapshot(), includeSchemas = false)
 
@@ -84,8 +85,10 @@ class AppModuleDirectory(
             if (tools.isEmpty()) nativeReason else "current_visible_provider_definitions", tools))
         NATIVE_MODULES.forEach { spec ->
             val references = tools.filter { it.id in spec.names }
-            result += Module(spec.id, "native_references", if (references.isEmpty()) "unsupported" else "available",
-                if (references.isEmpty()) nativeReason else "partial_tool_surface_not_full_module_api", references)
+            result += Module(spec.id, "native_references", if (references.isEmpty()) "unsupported" else if (spec.route != null) "route_unverified" else "available",
+                if (references.isEmpty()) nativeReason else if (spec.route != null)
+                    "tool_reference_only_backend_and_actor_permissions_unverified" else "partial_tool_surface_not_full_module_api", references,
+                managementRoute = spec.route)
         }
 
         val hostBound = safely { hostBackendBound?.invoke() } == true
@@ -128,6 +131,7 @@ class AppModuleDirectory(
             put("status", module.status)
             put("reason", module.reason)
             module.server?.let { put("server", it) }
+            module.managementRoute?.let { put("managementRoute", it) }
             put("toolIds", JsonArray(module.tools.map { JsonPrimitive(it.id) }))
             if (includeSchemas) put("tools", JsonArray(module.tools.map { tool -> buildJsonObject {
                 put("id", tool.id)
@@ -154,14 +158,24 @@ class AppModuleDirectory(
             NativeModule("memory", setOf("memory")),
             NativeModule("planning", setOf("plan", "scratchpad")),
             NativeModule("agents", setOf("invoke_subagent", "invoke_dual_agent", "team")),
-            NativeModule("configuration", setOf("app_config")),
+            NativeModule("configuration", setOf("app_config"), "app_config (module omitted)"),
+            NativeModule("workflow_management", setOf("app_config"), "app_config module=workflow"),
+            NativeModule("model_management", setOf("app_config"), "app_config module=model"),
+            NativeModule("session_management", setOf("app_config"), "app_config module=session"),
+            NativeModule("rules_management", setOf("app_config"), "app_config module=rules"),
+            NativeModule("distro_management", setOf("app_config"), "app_config module=distro"),
+            NativeModule("terminal_management", setOf("app_config"), "app_config module=terminal"),
+            NativeModule("plugin_management", setOf("app_config"), "app_config module=plugin"),
+            NativeModule("process_plugin_management", setOf("app_config"), "app_config module=process_plugin"),
+            NativeModule("web_plugin_management", setOf("app_config"), "app_config module=web_plugin"),
+            NativeModule("skill_management", setOf("app_config"), "app_config module=skill"),
+            NativeModule("bot_management", setOf("team"), "team (separate tool)"),
             NativeModule("capabilities", setOf("use_capability", "host")),
             NativeModule("skills", setOf("load_skill", "load_rule")),
             NativeModule("interaction", setOf("ask_user", "render_surface")),
             NativeModule("web_search", setOf("search_web")),
         )
         private val UI_ONLY_MODULES = listOf(
-            "model_management", "session_management", "workflow_management", "bot_management",
             "git_management", "browser_management", "terminal_ui", "diagnostics_ui", "permission_management",
         )
     }

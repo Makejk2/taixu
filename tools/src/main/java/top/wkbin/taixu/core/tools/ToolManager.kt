@@ -485,11 +485,12 @@ class ToolManager(
         return batchInstallComponents(if (componentIds.isEmpty()) suiteIds else componentIds)
     }
 
-    private fun installInternal(toolId: String, operation: String, targetDistro: String? = null, expected: ToolManifest? = null): Flow<InstallEvent> = flow {
+    private fun installInternal(toolId: String, operation: String, targetDistro: String? = null, expected: ToolManifest? = null,
+        expectedState: ApprovedPackageState? = null, authorize: suspend () -> Boolean = { true }): Flow<InstallEvent> = flow {
         localAccess?.requireLocal()
         val distro = targetDistro ?: currentDistroId()
         try {
-            packageOperations.install(distro, toolId, expected) { fixed ->
+            packageOperations.install(distro, toolId, expected, expectedState, authorize) { fixed ->
                 emitAll(installRecipe(toolId, operation, distro, fixed, checkNotNull(getAdapter(toolId, fixed, distro))))
             }
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -671,14 +672,27 @@ class ToolManager(
 
     fun update(toolId: String): Flow<InstallEvent> = installInternal(toolId, OPERATION_UPDATE)
 
+    /** Freeze target and complete manifest; ToolPackageOperations rechecks under its owner lock. */
+    fun installApproved(distro: String, expected: ToolManifest, state: ApprovedPackageState? = null,
+        authorize: suspend () -> Boolean = { true }): Flow<InstallEvent> =
+        installInternal(expected.id, OPERATION_INSTALL, distro, expected, state, authorize)
+    fun updateApproved(distro: String, expected: ToolManifest, state: ApprovedPackageState? = null,
+        authorize: suspend () -> Boolean = { true }): Flow<InstallEvent> =
+        installInternal(expected.id, OPERATION_UPDATE, distro, expected, state, authorize)
+
+
     fun cancelInstall(toolId: String) {
         installJobs[toolId]?.cancel(CancellationException("用户取消安装"))
     }
 
-    suspend fun uninstall(toolId: String, deleteData: Boolean = false) {
+    suspend fun uninstall(toolId: String, deleteData: Boolean = false) =
+        uninstallApproved(currentDistroId(), toolId, null, deleteData)
+
+    suspend fun uninstallApproved(distro: String, toolId: String, expected: ToolManifest?, deleteData: Boolean = false,
+        expectedState: ApprovedPackageState? = null, authorize: suspend () -> Boolean = { true }) {
         localAccess?.requireLocal()
-        val distro = currentDistroId(); toolSettingsRepository.setAutoStart(distro, toolId, false)
-        packageOperations.uninstall(distro, toolId) { fixed ->
+        packageOperations.uninstall(distro, toolId, expected, expectedState, authorize) { fixed ->
+            toolSettingsRepository.setAutoStart(distro, toolId, false)
             require(isToolSupported(toolId)) { "暂不支持卸载工具：$toolId" }
             installMutex.withLock {
                 check(toolId !in installJobs) { "工具正在安装：$toolId" }

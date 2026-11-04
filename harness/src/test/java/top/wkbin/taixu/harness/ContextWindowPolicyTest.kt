@@ -876,12 +876,13 @@ class ContextWindowPolicyTest {
 
     @Test
     fun `tool schema reserve covers the real provider-visible schema`() {
-        // 折叠线用常量 TOOL_SCHEMA_RESERVE_TOKENS 支付 tools schema；常量低于实测值时，
-        // 缺口会直接从余量里挖走（真实输入超出折叠线 → 400/413）。加工具后本测试会立刻失败。
+        // Reserve follows real base definitions; no manual constant updates when tools grow.
+        // Framing headroom is explicit; dynamic MCP definitions retain per-request accounting.
         val actual = ContextWindowPolicy.estimateToolDefinitionTokens(ProviderClient.TOOLS)
         val reserve = ContextWindowPolicy.TOOL_SCHEMA_RESERVE_TOKENS
+        assertEquals(actual + 256, reserve)
         assertTrue(
-            "TOOL_SCHEMA_RESERVE_TOKENS=$reserve 低于实测 schema=$actual（${ProviderClient.TOOLS.size} 个工具），需同步抬升",
+            "TOOL_SCHEMA_RESERVE_TOKENS=$reserve 低于实测 schema=$actual（${ProviderClient.TOOLS.size} 个工具），预留必须随真实定义计算",
             actual <= reserve,
         )
     }

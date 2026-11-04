@@ -238,6 +238,8 @@ data class ToolResult(
      * 与 [awaitingApproval] 的区别：这里没有待审批请求可供用户批准，必须由主智能体重新发起。
      */
     val approvalDeferred: Boolean = false,
+    /** Policy pause is not approval and never grants replay authority. */
+    val policyPaused: Boolean = false,
     /**
      * 工具产物中的图片附件引用列表（如 mcp__browser__screenshot 落盘的 PNG）。
      * 持久化兼容：旧数据无此字段；序列化与 Room payload 默认空数组。

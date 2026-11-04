@@ -50,12 +50,191 @@ class BotAssignmentRuntimeTest {
         sessions.upsert(HarnessSessionEntity("parent", "Group", 1, 1, null, workspace = "/workspace/project", executionTargetJson = "frozen-target"))
     }
 
+    private suspend fun seedPublishedTeam(policy: GroupGovernance = GroupGovernance()) {
+        seed()
+        db.personaBotDao().upsert(db.personaBotDao().findById("member")!!.copy(
+            id = "second", name = "Second", sessionId = "second-dm", modelId = "second-model"))
+        val definition = BotTeamDefinition("chief", mapOf("second" to "member"), policy)
+        db.botMemberGroupDao().installIndependentDefinition(
+            BotMemberGroupEntity("published", "Published", 1, Json.encodeToString(definition)),
+            listOf("chief", "member", "second").mapIndexed { index, id ->
+                BotMemberGroupMemberEntity("published", id, index, 1)
+            },
+        )
+        groups.attachTeam("group", "published")
+        // Test native owner provenance, not an implicit first-caller claim on a legacy group.
+        db.botAssignmentDao().insertTeamGroupOwner(TeamGroupOwnerEntity("group", "parent"))
+    }
+
+    private suspend fun rejected(message: String? = null, block: suspend () -> Unit) {
+        try { block(); fail("Expected admission rejection") } catch (e: IllegalArgumentException) {
+            message?.let { assertTrue("Expected '$it', got '${e.message}'", e.message.orEmpty().contains(it)) }
+        }
+    }
+
+    @Test fun `approved native start gives admin and two members distinct idempotent roots with inherited authority`(): Unit = runBlocking {
+        seedPublishedTeam()
+        val source = sessions.findById("parent")!!.copy(approvalMode = "assisted", runMode = "plan", projectType = "android", modelId = "source-model", modelVariant = "source-variant")
+        sessions.upsert(source)
+        val entered = MutableStateFlow<Set<String>>(emptySet())
+        val engine = runtime { task, _, admitted ->
+            admitted(null)
+            entered.update { it + task.botId }
+            awaitCancellation()
+        }
+        val roots = listOf("chief", "member", "second").map { bot ->
+            engine.createApprovedTeamRoot("parent", bot, "group", "work $bot", listOf("src/$bot"), "approved-operation")
+        }
+        withTimeout(10_000) { entered.first { it.size == 3 } }
+        assertEquals(setOf("chief", "member", "second"), entered.value)
+        assertEquals(3, roots.map { it.id }.distinct().size)
+        assertEquals(3, roots.map { it.sessionId }.distinct().size)
+        assertEquals(1, roots.map { it.rootWorkId }.distinct().size)
+        roots.forEach { task ->
+            assertNull(task.parentAssignmentId)
+            assertNull(task.batchId)
+            val session = sessions.findById(task.sessionId!!)!!
+            assertEquals(source.workspace, session.workspace)
+            assertEquals(source.projectType, session.projectType)
+            assertEquals(source.approvalMode, session.approvalMode)
+            assertEquals(source.runMode, session.runMode)
+            assertEquals(source.executionTargetJson, session.executionTargetJson)
+            assertEquals(bots.getBot(task.botId)!!.modelId, session.modelId)
+            assertEquals(bots.getBot(task.botId)!!.modelVariant, session.modelVariant)
+            assertEquals(listOf("src/${task.botId}"), task.writePaths)
+            val again = engine.createApprovedTeamRoot("parent", task.botId, "group", "retry", listOf("src/${task.botId}"), "approved-operation")
+            assertEquals(task.id, again.id)
+            assertEquals(task.sessionId, again.sessionId)
+            assertEquals(1, engine.history(task.id).size)
+        }
+        rejected("只能向本群直属下级") { engine.create("chief", "group", "chief", "parent", "ordinary self") }
+        rejected("只能向本群直属下级") { engine.create("second", "group", "chief", "parent", "ordinary non-direct") }
+        engine.cancelGroup("group")
+        roots.forEach { task ->
+            awaitStatus(task.id, BotAssignmentStatus.CANCELLED)
+            val again = engine.createApprovedTeamRoot("parent", task.botId, "group", "must not replay", task.writePaths, "approved-operation")
+            assertEquals(task.id, again.id)
+            assertEquals(BotAssignmentStatus.CANCELLED, again.status)
+            assertEquals(1, engine.history(task.id).size)
+            assertEquals("cancelled", engine.history(task.id).single().status)
+        }
+    }
+
+    @Test fun `approved roots reject nonexistent bot and assignment sources and workspace escape`(): Unit = runBlocking {
+        seedPublishedTeam()
+        val engine = runtime { _, _, _ -> awaitCancellation() }
+        rejected { engine.createApprovedTeamRoot("missing", "chief", "group", "fake", emptyList(), "op") }
+        sessions.upsert(HarnessSessionEntity("member-dm", "Member", 1, 1, null))
+        rejected { engine.createApprovedTeamRoot("member-dm", "chief", "group", "fake", emptyList(), "op") }
+        rejected { engine.createApprovedTeamRoot("parent", "chief", "group", "escape", listOf("../outside"), "op") }
+        val root = engine.createApprovedTeamRoot("parent", "member", "group", "valid", emptyList(), "op")
+        rejected { engine.createApprovedTeamRoot(root.sessionId!!, "chief", "group", "nested", emptyList(), "nested") }
+        assertTrue(tasks.assignmentsForBot("chief").isEmpty())
+    }
+
+    @Test fun `DAO transaction independently enforces native root trust and inheritance`(): Unit = runBlocking {
+        seedPublishedTeam()
+        val engine = runtime { _, _, _ -> awaitCancellation() }
+        val root = engine.createApprovedTeamRoot("parent", "chief", "group", "valid", emptyList(), "approved")
+        val entity = db.botAssignmentDao().findById(root.id)!!
+        val session = sessions.findById(root.sessionId!!)!!
+        suspend fun direct(source: String?, trusted: Boolean = true, candidate: BotAssignmentEntity = entity,
+            childSession: HarnessSessionEntity = session) {
+            db.botAssignmentDao().createIndependent(candidate, childSession,
+                BotAssignmentRequestEntity("direct", candidate.id, "fake", 1),
+                dispatchOperationId = "approved", trustedNativeTeamStart = trusted, sourceSessionId = source)
+        }
+        // An internal boolean is not sufficient: the DAO revalidates real source identity.
+        rejected("缺少可信来源会话") { direct(null) }
+        rejected("来源会话不存在") { direct("missing") }
+        sessions.upsert(HarnessSessionEntity("member-dm", "Member", 1, 1, null))
+        rejected("来源不是主用户会话") { direct("member-dm") }
+        rejected("来源不是主用户会话") { direct(root.sessionId) }
+        rejected("只能向本群直属下级") { direct("parent", trusted = false) }
+        rejected { direct("parent", candidate = entity.copy(parentAssignmentId = root.id)) }
+        rejected { direct("parent", candidate = entity.copy(reportToBotId = "member")) }
+        for (changed in listOf(
+            session.copy(workspace = "/other"), session.copy(projectType = "flutter"),
+            session.copy(executionTargetJson = "other-target"), session.copy(approvalMode = "different"),
+            session.copy(runMode = "plan"), session.copy(modelId = "different"), session.copy(modelVariant = "different"),
+        )) rejected("继承不匹配") { direct("parent", childSession = changed) }
+        rejected("写入路径必须在来源工作区内") { direct("parent", candidate = entity.copy(writePathsJson = "[\"../escape\"]")) }
+        rejected("根任务幂等标识与来源不匹配") { direct("parent", candidate = entity.copy(rootWorkId = "fake")) }
+        // Positive control: the same real Room transaction accepts a valid deduplicated admission.
+        direct("parent")
+        assertEquals(1, engine.history(root.id).size)
+    }
+
+    @Test fun `native approval never bypasses governed executors or unlinked rooms`(): Unit = runBlocking {
+        seedPublishedTeam(GroupGovernance(listOf(GroupReviewRule("rule", "Review", "chief", "member", "second"))))
+        val engine = runtime { _, _, _ -> awaitCancellation() }
+        rejected { engine.createApprovedTeamRoot("parent", "second", "group", "bypass", emptyList(), "op") }
+        val root = engine.createApprovedTeamRoot("parent", "chief", "group", "author", emptyList(), "op")
+        val entity = db.botAssignmentDao().findById(root.id)!!
+        rejected {
+            db.botAssignmentDao().createIndependent(entity.copy(botId = "second", stageId = "delegate:root:second", workItemId = "second"),
+                sessions.findById(root.sessionId!!)!!, BotAssignmentRequestEntity("blocked", root.id, "bypass", 1),
+                dispatchOperationId = "op", trustedNativeTeamStart = true, sourceSessionId = "parent")
+        }
+        db.groupChatDao().upsertGroup(GroupChatEntity("unlinked", "Old", "chief", "", 1))
+        groups.addMember("unlinked", "chief", 0)
+        rejected { engine.createApprovedTeamRoot("parent", "chief", "unlinked", "old", emptyList(), "op") }
+    }
+
     private fun runtime(execute: BotAssignmentExecutor) = BotAssignmentRuntime(tasks, groups, bots, sessions, control, tracker, execute, log, scope)
     private suspend fun awaitStatus(id: String, expected: BotAssignmentStatus) = withTimeout(10_000) {
         while (tasks.get(id)?.status != expected) delay(10)
     }
 
-    @Test fun `active followup queues without interrupting tools then reuses the same session and frozen target`() = runBlocking {
+    @Test fun `running A and B read and reply inside their original native turns without settling queued mail`(): Unit = runBlocking {
+        seedPublishedTeam()
+        val aSession = CompletableDeferred<String>()
+        val bSession = CompletableDeferred<String>()
+        val aSent = CompletableDeferred<String>()
+        val bReplied = CompletableDeferred<String>()
+        val verified = CompletableDeferred<Unit>()
+        val entries = java.util.concurrent.atomic.AtomicInteger()
+        lateinit var engine: BotAssignmentRuntime
+        engine = runtime { task, request, admitted ->
+            entries.incrementAndGet()
+            val sid = requireNotNull(task.sessionId)
+            val accepted = control.submit(sid, request.instruction) as PromptSubmission.Accepted
+            admitted(accepted.taskId)
+            if (task.botId == "member") {
+                aSession.complete(sid)
+                val recipient = tasks.assignmentForSession(bSession.await())!!
+                aSent.complete(engine.sendMemberMessage(sid, recipient.id, "A asks B while still working", "a-to-b"))
+                val replyId = bReplied.await()
+                val inbox = engine.readMemberInbox(sid)
+                assertTrue(inbox.contains("B replies before either native turn completes"))
+                assertTrue(inbox.contains(replyId))
+                assertEquals(BotAssignmentRequest.PENDING, tasks.getRequest(replyId)!!.status)
+                assertEquals(request.id, tasks.get(task.id)!!.activeRequestId)
+                assertEquals(BotAssignmentStatus.RUNNING, tasks.get(recipient.id)!!.status)
+                assertEquals(2, entries.get())
+                verified.complete(Unit)
+            } else {
+                bSession.complete(sid)
+                val sender = tasks.assignmentForSession(aSession.await())!!
+                val mailId = aSent.await()
+                val inbox = engine.readMemberInbox(sid)
+                assertTrue(inbox.contains("A asks B while still working"))
+                assertTrue(inbox.contains(mailId))
+                assertEquals(BotAssignmentRequest.PENDING, tasks.getRequest(mailId)!!.status)
+                assertEquals(request.id, tasks.get(task.id)!!.activeRequestId)
+                bReplied.complete(engine.sendMemberMessage(sid, sender.id,
+                    "B replies before either native turn completes", "b-to-a"))
+            }
+            awaitCancellation()
+        }
+        engine.createApprovedTeamRoot("parent", "member", "group", "A private task", emptyList(), "inbox-op")
+        engine.createApprovedTeamRoot("parent", "second", "group", "B private task", emptyList(), "inbox-op")
+        withTimeout(10_000) { verified.await() }
+        assertEquals(SessionRunState.RUNNING, control.sessionRunStates.value[aSession.await()])
+        assertEquals(SessionRunState.RUNNING, control.sessionRunStates.value[bSession.await()])
+    }
+
+    @Test fun `active followup queues without interrupting tools then reuses the same session and frozen target`(): Unit = runBlocking {
         seed()
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -88,7 +267,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(2, tasks.get(task.id)!!.revision)
     }
 
-    @Test fun `blocked work can receive missing input without losing the original report and artifacts`() = runBlocking {
+    @Test fun `blocked work can receive missing input without losing the original report and artifacts`(): Unit = runBlocking {
         seed()
         val engine = runtime { task, request, admitted ->
             admitted("native")
@@ -104,7 +283,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(2, engine.history(task.id).size)
     }
 
-    @Test fun `cancellation fences queued requests and late settlement cannot restart or overwrite the task`() = runBlocking {
+    @Test fun `cancellation fences queued requests and late settlement cannot restart or overwrite the task`(): Unit = runBlocking {
         seed()
         val entered = CompletableDeferred<Unit>()
         val engine = runtime { task, _, admitted ->
@@ -123,7 +302,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(BotAssignmentStatus.CANCELLED, tasks.get(task.id)!!.status)
     }
 
-    @Test fun `uncertain native submission is never silently rerun and busy or deleted sessions reject continuation`() = runBlocking {
+    @Test fun `uncertain native submission is never silently rerun and busy or deleted sessions reject continuation`(): Unit = runBlocking {
         seed()
         val engine = runtime { task, request, admitted ->
             control.submit(task.sessionId!!, request.instruction)
@@ -140,7 +319,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(1, control.count)
     }
 
-    @Test fun `out of workspace write hints reject before creating or submitting a task`() = runBlocking {
+    @Test fun `out of workspace write hints reject before creating or submitting a task`(): Unit = runBlocking {
         seed()
         val engine = runtime { _, _, _ -> error("must not dispatch") }
         listOf("/root/game", "../escape", "/workspace/other", "docs/../../escape").forEach { path ->
@@ -150,7 +329,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(0, control.count)
     }
 
-    @Test fun `member model default never borrows the source variant even on the same profile`() = runBlocking {
+    @Test fun `member model default never borrows the source variant even on the same profile`(): Unit = runBlocking {
         seed()
         sessions.upsert(sessions.findById("parent")!!.copy(modelId = "member-model", modelVariant = "chief-variant"))
         val engine = runtime { _, _, _ -> GroupTurnOutcome("done", false) }
@@ -162,7 +341,7 @@ class BotAssignmentRuntimeTest {
         assertEquals("own-model", sessions.findById(second.sessionId!!)!!.modelVariant)
     }
 
-    @Test fun `unbound member follows global default instead of inheriting the chief profile or variant`() = runBlocking {
+    @Test fun `unbound member follows global default instead of inheriting the chief profile or variant`(): Unit = runBlocking {
         seed()
         bots.saveBot(bots.getBot("member")!!.copy(modelId = null, modelVariant = null))
         sessions.upsert(sessions.findById("parent")!!.copy(modelId = "chief-model", modelVariant = "chief-variant"))
@@ -182,7 +361,7 @@ class BotAssignmentRuntimeTest {
         assertEquals("chief-model", sessions.findById("parent")!!.modelId)
     }
 
-    @Test fun `continued legacy task repairs its stale model binding from the member selection`() = runBlocking {
+    @Test fun `continued legacy task repairs its stale model binding from the member selection`(): Unit = runBlocking {
         seed()
         val engine = runtime { task, _, admitted ->
             assertEquals("member-model", sessions.findById(task.sessionId!!)!!.modelId)
@@ -201,7 +380,7 @@ class BotAssignmentRuntimeTest {
         assertEquals("frozen-target", sessions.findById(task.sessionId!!)!!.executionTargetJson)
     }
 
-    @Test fun `empty source workspace retains the frozen identity while file hints resolve under workspace`() = runBlocking {
+    @Test fun `empty source workspace retains the frozen identity while file hints resolve under workspace`(): Unit = runBlocking {
         seed()
         sessions.upsert(HarnessSessionEntity("empty-parent", "Empty", 1, 1, null,
             workspace = "", executionTargetJson = "frozen-empty-workspace"))
@@ -211,7 +390,7 @@ class BotAssignmentRuntimeTest {
         assertEquals("frozen-empty-workspace", sessions.findById(task.sessionId!!)!!.executionTargetJson)
     }
 
-    @Test fun `work id groups tasks into one batch while plain dispatch stays single`() = runBlocking {
+    @Test fun `work id groups tasks into one batch while plain dispatch stays single`(): Unit = runBlocking {
         seed()
         val engine = runtime { _, _, admitted ->
             admitted(null)
@@ -227,7 +406,7 @@ class BotAssignmentRuntimeTest {
         assertNull(loose.batchId)
     }
 
-    @Test fun `synchronous nested dispatch returns once through the original parent execution`() = runBlocking {
+    @Test fun `synchronous nested dispatch returns once through the original parent execution`(): Unit = runBlocking {
         seed()
         val member = db.personaBotDao().findById("member")!!
         db.personaBotDao().upsert(member.copy(id = "dev", name = "Dev", sessionId = "dev-dm"))
@@ -260,7 +439,7 @@ class BotAssignmentRuntimeTest {
         assertEquals("chief", groups.pendingDeliveries().first().single().botId)
     }
 
-    @Test fun `eight distinct members enter execution before any one is released`() = runBlocking {
+    @Test fun `eight distinct members enter execution before any one is released`(): Unit = runBlocking {
         seed()
         val worker = db.personaBotDao().findById("member")!!
         repeat(8) { i ->
@@ -289,7 +468,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(1, groups.pendingDeliveries().first().size)
     }
 
-    @Test fun `reopened prerequisite prevents executor entry until the same task is explicitly continued`() = runBlocking {
+    @Test fun `reopened prerequisite prevents executor entry until the same task is explicitly continued`(): Unit = runBlocking {
         seed()
         val pre = BotAssignment("pre", "group", "member", "Member", "pre", "pre", BotAssignmentStatus.COMPLETED,
             createdAt = 1, startedAt = 1)
@@ -317,7 +496,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(1, entries.get())
     }
 
-    @Test fun `nested team waits for child then verifies in the original parent session`() = runBlocking {
+    @Test fun `nested team waits for child then verifies in the original parent session`(): Unit = runBlocking {
         seed()
         val member = db.personaBotDao().findById("member")!!
         db.personaBotDao().upsert(member.copy(id = "dev", name = "Dev", sessionId = "dev-dm"))
@@ -353,7 +532,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(parent.id, tasks.batchAssignments("inner").single().parentAssignmentId)
     }
 
-    @Test fun `members exchange durable messages while sender runs and parent conversation stops`() = runBlocking {
+    @Test fun `members exchange durable messages while sender runs and parent conversation stops`(): Unit = runBlocking {
         seed()
         val member = db.personaBotDao().findById("member")!!
         db.personaBotDao().upsert(member.copy(id = "peer", name = "Peer", sessionId = "peer-dm"))
@@ -401,7 +580,7 @@ class BotAssignmentRuntimeTest {
         assertEquals(1, engine.history(b.id).count { it.id == key })
     }
 
-    @Test fun `new independent members inherit approval and plan intent without escalation`() = runBlocking {
+    @Test fun `new independent members inherit approval and plan intent without escalation`(): Unit = runBlocking {
         seed()
         sessions.upsert(sessions.findById("parent")!!.copy(approvalMode = "request", runMode = "plan"))
         val release = CompletableDeferred<Unit>()

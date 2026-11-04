@@ -6,9 +6,13 @@ import kotlinx.serialization.json.JsonPrimitive
 /** Disabling still permits inspection, grant revocation and stopping previously started teams. */
 internal fun aiAdminRequiresEnabled(tool: String, args: JsonObject): Boolean {
     val action = (args["action"] as? JsonPrimitive)?.content.orEmpty()
+    if (tool == "app_config" && (args["module"] as? JsonPrimitive)?.content == "model")
+        return action !in setOf("list", "get", "form_status")
+    if (tool == "app_config" && (args["module"] as? JsonPrimitive)?.content == "workflow")
+        return action !in setOf("list", "get", "status")
     if (tool == "app_config") return action !in setOf("list", "get", "grants", "revoke", "modules", "inspect_module")
     if (tool == "team") {
-        if (action in setOf("list", "get", "status", "proposal", "apply")) return false
+        if (action in setOf("list", "get", "status", "proposal", "suggestions", "apply")) return false
         val op = (args["operation"] as? JsonObject)?.get("op") as? JsonPrimitive
         return action != "propose" || op?.content != "stop"
     }

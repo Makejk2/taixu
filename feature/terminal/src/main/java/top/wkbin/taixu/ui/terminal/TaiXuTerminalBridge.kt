@@ -26,6 +26,7 @@ import android.view.View
 class TaiXuTerminalBridge(
     private val context: Context,
     private val router: TerminalSessionClientRouter?,
+    private val writeInput: (TerminalSession, ByteArray) -> Unit,
 ) : TerminalSessionClient, TerminalViewClient {
 
     var terminalView: TerminalView? = null
@@ -64,7 +65,7 @@ class TaiXuTerminalBridge(
 
     fun sendBytes(session: TerminalSession?, bytes: ByteArray) {
         if (session != null && session.isRunning && bytes.isNotEmpty()) {
-            session.write(bytes, 0, bytes.size)
+            writeInput(session, bytes)
         }
     }
 

@@ -22,6 +22,8 @@ data class HarnessPlugin(
     val checkpoints: List<ToolCheckpoint<ToolExecutionRequest, ToolResult>> = emptyList(),
     /** Stable package identity for workflow lookup; tool domains themselves are version-pinned. */
     val packageId: String? = null,
+    /** Native installed-package content identity, not a model-supplied version label. */
+    val originFingerprint: String? = null,
 )
 
 data class PluginToolRequest(val arguments: JsonObject, val sessionId: String, val workspace: String, val operationId: String?)

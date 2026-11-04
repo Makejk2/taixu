@@ -28,10 +28,11 @@ class WebPluginRepository(private val registry: ToolRegistry) {
         is AppResult.Failure -> throwImportFailure(result)
     }
 
-    suspend fun import(uri: Uri, expected: ToolManifest) = withContext(Dispatchers.IO) {
+    suspend fun import(uri: Uri, expected: ToolManifest, authorize: suspend () -> Boolean = { true }) = withContext(Dispatchers.IO) {
         operations.withLock {
             changing.value = setOf(expected.id)
             try {
+                check(authorize()) { "原生管理授权已失效" }
                 when (val result = registry.importLocal(uri, expected = expected, execution = "WEB")) {
                     is AppResult.Success -> Unit
                     is AppResult.Failure -> throwImportFailure(result)
@@ -43,10 +44,14 @@ class WebPluginRepository(private val registry: ToolRegistry) {
         }
     }
 
-    suspend fun remove(expected: ToolManifest) = withContext(Dispatchers.IO) {
+    suspend fun remove(expected: ToolManifest, authorize: suspend () -> Boolean = { true }) = withContext(Dispatchers.IO) {
         operations.withLock {
             changing.value = setOf(expected.id)
-            try { registry.removeWebPackage(expected) }
+            try {
+                check(registry.webPackages().any { it == expected }) { "Web plugin changed" }
+                check(authorize()) { "原生管理授权已失效" }
+                registry.removeWebPackage(expected)
+            }
             finally { reload(); changing.value = emptySet() }
         }
     }

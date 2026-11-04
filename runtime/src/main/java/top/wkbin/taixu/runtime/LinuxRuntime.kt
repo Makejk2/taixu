@@ -25,6 +25,15 @@ interface LinuxRuntime {
     suspend fun initialize(request: RuntimeInstallRequest = RuntimeInstallRequest("ubuntu")): AppResult<Unit>
     suspend fun restoreInstalledState(): Boolean
     suspend fun updateRootfs(distroId: String? = null): AppResult<Unit>
+    /** Reviewed update must not silently fall back to a mutable tag on older implementations. */
+    suspend fun updateRootfsApproved(distroId: String, manifestDigest: String): AppResult<Unit> =
+        error("当前运行时未提供固定镜像更新入口")
+    /** Snapshot and mutation share the native lifecycle owner, including native UI writers. */
+    suspend fun managementSnapshot(target: String, workspace: String): top.wkbin.taixu.runtime.admin.DistroResourceSnapshot =
+        error("RUNTIME_OWNER_TRANSACTION_UNAVAILABLE")
+    suspend fun applyManagement(expected: top.wkbin.taixu.runtime.admin.DistroResourceSnapshot,
+        mutation: top.wkbin.taixu.runtime.admin.ApprovedRuntimeMutation): AppResult<Unit> =
+        error("RUNTIME_OWNER_TRANSACTION_UNAVAILABLE")
     suspend fun checkRootfsUpdate(distroId: String? = null): AppResult<RootfsUpdateInfo>
     suspend fun healthCheck(distroId: String? = null): RuntimeHealth
 
@@ -75,6 +84,13 @@ interface LinuxRuntime {
     fun getBackgroundLogs(idOrToolId: String): List<String> = emptyList()
     fun clearBackgroundLogs(idOrToolId: String) = Unit
 
+    /** Caller retains this idempotent pin until ALL owned resources have closed successfully. */
+    suspend fun acquireExecutionTargetLease(distribution: String): AutoCloseable =
+        error("当前运行时未提供可保留的执行目标租约")
+
+    /** Lexical convenience only: resource owners with retryable cleanup must use acquire instead. */
+    suspend fun <T> withExecutionTargetLease(distribution: String, block: suspend () -> T): T =
+        error("当前运行时未提供执行目标租约")
     suspend fun shutdown()
     /** Execute file cleanup only while runtime launches and installation are excluded. */
     suspend fun withStorageCleanup(block: suspend () -> Unit) {

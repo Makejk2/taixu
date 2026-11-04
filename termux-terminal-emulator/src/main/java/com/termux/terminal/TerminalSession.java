@@ -185,10 +185,33 @@ public final class TerminalSession extends TerminalOutput {
 
     }
 
+    /**
+     * Synchronous admission gate for everything that enqueues PTY input.
+     * It covers keyboard, IME, paste and emulator protocol replies alike, because all of
+     * them reach {@link #write}. The gate must never suspend: it runs inside the caller's
+     * monitor and returns without running {@code enqueue} when input is not permitted.
+     */
+    public interface InputOwner {
+        void enqueue(TerminalSession session, Runnable enqueue);
+    }
+
+    private volatile InputOwner mInputOwner;
+
+    /** Bind once by the native owner before publishing the session. */
+    public void bindInputOwner(InputOwner owner) {
+        mInputOwner = owner;
+    }
+
     /** Write data to the shell process. */
     @Override
     public void write(byte[] data, int offset, int count) {
-        if (mShellPid > 0) mTerminalToProcessIOQueue.write(data, offset, count);
+        if (mShellPid <= 0 || count <= 0) return;
+        InputOwner owner = mInputOwner;
+        if (owner == null) {
+            mTerminalToProcessIOQueue.write(data, offset, count);
+        } else {
+            owner.enqueue(this, () -> mTerminalToProcessIOQueue.write(data, offset, count));
+        }
     }
 
     /** Write the Unicode code point to the terminal encoded in UTF-8. */

@@ -18,18 +18,26 @@ internal class WorkflowJournalRecorder(
     suspend fun checkpoint() = lock.withLock { sink(state.value) }
 
     suspend fun started(nodeId: String) = record(nodeId, null)
-    suspend fun settled(nodeId: String, output: NodeExecutionOutput, expansion: WorkflowExpansion? = null) = record(nodeId, output, expansion)
+    suspend fun settled(nodeId: String, output: NodeExecutionOutput, expansion: WorkflowExpansion? = null, admission: WorkflowExpansionAdmission? = null) = record(nodeId, output, expansion, admission)
 
-    private suspend fun record(nodeId: String, output: NodeExecutionOutput?, expansion: WorkflowExpansion? = null) = lock.withLock {
+    private suspend fun record(nodeId: String, output: NodeExecutionOutput?, expansion: WorkflowExpansion? = null, admission: WorkflowExpansionAdmission? = null) = lock.withLock {
         currentCoroutineContext().ensureActive()
         require(expansion == null || output?.status == NodeRunStatus.SUCCESS) { "只有成功审批可以保存扩图" }
+        if (expansion != null && currentCoroutineContext()[WorkflowExecutionContext]?.binding?.source != null) {
+            requireNotNull(admission) { "来源绑定扩图缺少原生批准凭据" }
+        }
+        require(admission == null || expansion != null) { "孤立的扩图批准凭据" }
+        if (admission != null) {
+            check(admission.parentHash == WorkflowExecutionBinding.hash(state.value.definition)) { "审批期间图已变化，请重新确认提案" }
+            check(admission.definitionHash == WorkflowExecutionBinding.hash(WorkflowExpansions.append(state.value.definition, nodeId, requireNotNull(expansion)))) { "批准图与待持久化图不一致" }
+        }
         require(state.value.journal.size < 10_000) { "执行日志超过 10000 条，请另起一次运行" }
         state.update { current ->
             val previous = current.journal.lastOrNull { it.nodeId == nodeId }
             val attempt = if (output == null) (previous?.attempt ?: 0) + 1 else previous?.attempt ?: 1
             val entry = WorkflowJournalEntry(current.journal.size + 1, nodeId, attempt,
                 if (output == null) WorkflowJournalKind.STARTED else WorkflowJournalKind.SETTLED,
-                System.currentTimeMillis(), output, expansion)
+                System.currentTimeMillis(), output, expansion, admission)
             val context = current.context
             val definition = expansion?.let { WorkflowExpansions.append(current.definition, nodeId, it) } ?: current.definition
             current.copy(

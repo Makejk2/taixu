@@ -1,70 +1,41 @@
 package top.wkbin.taixu.core.database
 
-import androidx.room.ColumnInfo
 import androidx.room.Transaction
 import androidx.room.Dao
-import androidx.room.Entity
-import androidx.room.ForeignKey
-import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
-import androidx.room.PrimaryKey
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 import top.wkbin.taixu.core.model.bot.BotWorkBatch
 
-@Entity(
-    tableName = "bot_assignments",
-    foreignKeys = [
-        ForeignKey(
-            entity = GroupChatEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["groupId"],
-            onDelete = ForeignKey.CASCADE,
-        ),
-    ],
-    indices = [
-        Index(value = ["groupId", "createdAt"]),
-        Index(value = ["status"]),
-        Index(value = ["sessionId"]),
-        Index(value = ["batchId", "status"]),
-        Index(value = ["groupId", "rootWorkId", "stageId", "workItemId"], unique = true),
-    ],
-)
-data class BotAssignmentEntity(
-    @PrimaryKey val id: String,
-    val groupId: String?,
-    val botId: String,
-    val botName: String,
-    val title: String,
-    val task: String,
-    val status: String,
-    val writePathsJson: String,
-    val createdAt: Long,
-    val startedAt: Long,
-    val finishedAt: Long?,
-    val summary: String?,
-    val error: String?,
-    val sessionId: String?,
-    val laneName: String?,
-    @ColumnInfo(defaultValue = "NULL") val reportToBotId: String? = null,
-    @ColumnInfo(defaultValue = "0") val independent: Boolean = false,
-    @ColumnInfo(defaultValue = "0") val revision: Int = 0,
-    @ColumnInfo(defaultValue = "NULL") val activeRequestId: String? = null,
-    @ColumnInfo(defaultValue = "'[]'") val dependsOnJson: String = "[]",
-    @ColumnInfo(defaultValue = "NULL") val batchId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val parentAssignmentId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val budgetId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val proposalId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val proposalVersion: Int? = null,
-    @ColumnInfo(defaultValue = "NULL") val teamBinding: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val rootWorkId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val stageId: String? = null,
-    @ColumnInfo(defaultValue = "NULL") val workItemId: String? = null,
-)
-
 @Dao
-interface BotAssignmentDao : GroupDeliveryDao, BotAssignmentRequestDao, AssignmentHierarchyDao, TaskBudgetDao, GroupGovernanceDao, AssignmentWorkDao {
+interface BotAssignmentDao : TeamOwnershipDao, TeamCommunicationDao, NativeTeamStartDao, GroupDeliveryDao, BotAssignmentRequestDao, AssignmentHierarchyDao, TaskBudgetDao, GroupGovernanceDao, AssignmentWorkDao {
+    @Transaction
+    suspend fun sendCommunication(sourceSession: String, targetId: String, body: String, messageId: String, now: Long): top.wkbin.taixu.core.model.bot.TeamCommunicationReceipt =
+        sendCommunicationNative(sourceSession, targetId, body, messageId, now)
+
+    @Transaction
+    suspend fun communicationSnapshot(groupId: String): top.wkbin.taixu.core.model.bot.TeamCommunicationSnapshot =
+        communicationSnapshotNative(groupId)
+
+    /** Validation and write remain inside the owning Room transaction. */
+    @Transaction
+    suspend fun approveCommunicationPolicy(groupId: String, expectedRevision: Int,
+        policy: top.wkbin.taixu.core.model.bot.TeamCommunicationPolicy, sourceSession: String, approvalId: String, now: Long) =
+        approveCommunicationPolicyNative(groupId, expectedRevision, policy, sourceSession, approvalId, now)
+
+    /** Bounded transaction, not a quota: caller keyset-pages until empty, never drops held rows. */
+    @Transaction
+    suspend fun resumeCommunicationPage(groupId: String, after: Long, now: Long): Long? {
+        val rows = heldCommunications(groupId, after, 128)
+        rows.forEach { releaseCommunication(it, now) }
+        return rows.lastOrNull()?.sequence
+    }
+
+    @Transaction
+    suspend fun readCommunicationInbox(sourceSession: String, after: Long, limit: Int): List<top.wkbin.taixu.core.model.bot.TeamCommunicationMessage> =
+        readCommunicationInboxNative(sourceSession, after, limit)
+
     @Query("SELECT * FROM bot_assignments WHERE botId = :botId AND independent = 1")
     suspend fun assignmentsForBot(botId: String): List<BotAssignmentEntity>
 
@@ -79,13 +50,20 @@ interface BotAssignmentDao : GroupDeliveryDao, BotAssignmentRequestDao, Assignme
         batch: BotWorkBatchEntity? = null,
         dispatchOperationId: String? = null,
         nativeTaskId: String? = null,
+        trustedNativeTeamStart: Boolean = false,
+        sourceSessionId: String? = null,
     ): String {
         require(task.independent && task.sessionId == session.id && request.assignmentId == task.id)
         val group = requireNotNull(task.groupId)
         require(deliveryMember(group, task.botId)) { "执行成员已移出群聊" }
         require(task.reportToBotId != null && deliveryMember(group, task.reportToBotId)) { "请求者已移出群聊" }
         val team = effectiveTeam(group)
-        require(team.canAssign(task.reportToBotId, task.botId) || governance(group).canRoute(task.reportToBotId, task.botId)) { "只能向本群直属下级派发新任务" }
+        if (trustedNativeTeamStart) {
+            validateNativeTeamRoot(task, session, batch, sourceSessionId, dispatchOperationId, group, team)
+            bindNativeRootOwner(group, requireNotNull(task.rootWorkId), requireNotNull(sourceSessionId))
+        } else {
+            require(team.canAssign(task.reportToBotId, task.botId) || governance(group).canRoute(task.reportToBotId, task.botId)) { "只能向本群直属下级派发新任务" }
+        }
         val boundWork = task.proposalId?.let { proposal(it) }?.rootWorkId
         require(boundWork == null || task.rootWorkId == boundWork) { "方案所属业务任务不匹配" }
         existingWorkTask(task.copy(teamBinding = linkedBinding(group)))?.let {
@@ -147,6 +125,11 @@ interface BotAssignmentDao : GroupDeliveryDao, BotAssignmentRequestDao, Assignme
     @Transaction
     suspend fun claimRequest(id: String, now: Long): Boolean {
         val request = findAssignmentRequest(id)?.takeIf { it.status == "pending" } ?: return false
+        // Ledger cancellation is authoritative even when a pending dispatch snapshot was already read.
+        if (communication(id)?.state?.let { it != "queued" } == true) {
+            cancelUnclaimedCommunicationRequest(id)
+            return false
+        }
         val task = findById(request.assignmentId) ?: return false
         if (task.status != "QUEUED" || !task.independent) return false
         if (!hasOpenTaskAncestry(task) || !deliveryMember(requireNotNull(task.groupId), task.botId) ||
@@ -180,7 +163,11 @@ interface BotAssignmentDao : GroupDeliveryDao, BotAssignmentRequestDao, Assignme
         // Uncertain native effects require explicit resumption, even if a later instruction was queued.
         val waiting = !uncertain && success && (waitingUnbatchedChildren(task.id) > 0 ||
             task.sessionId?.let { waitingChildBatches(it) > 0 } == true)
-        val status = if (!uncertain && queuedAssignmentRequests(task.id) > 0) "QUEUED" else if (waiting) "WAITING_CHILDREN" else outcome
+        val policyPaused = request.blockedReason?.startsWith("USER_RULE_PAUSED") == true
+        // Already queued peer messages are not user authorization to resume a policy stop.
+        val status = if (policyPaused) "BLOCKED"
+            else if (!uncertain && queuedAssignmentRequests(task.id) > 0) "QUEUED"
+            else if (waiting) "WAITING_CHILDREN" else outcome
         if (uncertain) settleInterruptedAssignmentMessages(task.id, "⚠️ 原执行结果待核对，未自动重跑")
         val detail = if (uncertain) error else request.blockedReason ?: if (!success) error else if (waiting) "等待直属下级交付后在原任务验收" else null
         settleAssignment(task.id, status, now, summary, detail)
@@ -227,7 +214,8 @@ interface BotAssignmentDao : GroupDeliveryDao, BotAssignmentRequestDao, Assignme
     @Query("SELECT * FROM bot_assignments WHERE id = :id LIMIT 1")
     suspend fun findById(id: String): BotAssignmentEntity?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    // REPLACE deletes the parent row and cascades its request history; updates must preserve it.
+    @androidx.room.Upsert
     suspend fun upsert(assignment: BotAssignmentEntity)
 
     @Query(

@@ -29,6 +29,10 @@ class GroupGovernanceGuard(private val groups: GroupChatRepository, private val 
         if (runCatching { policy.validate(team) }.isFailure) return "审议成员或组织已变化，请在团队组中修正规则"
         val botId = task?.botId ?: bots.getBotBySessionId(sessionId)?.id
         if (botId !in team.memberIds) return "执行成员已移出群聊"
+        // Suggesting policy is not executing it: Team backend revalidates member identity and
+        // only the native owner can adopt a fresh proposal and explicitly approve mutation.
+        if (call.tool == HarnessTool.TEAM &&
+            (call.args["action"] as? JsonPrimitive)?.content in setOf("suggest", "suggestions")) return null
         if (call.tool in READ_ONLY) return null
         if (call.tool == HarnessTool.MCP && call.rawToolName == "use_capability") {
             val action = (call.args["action"] as? JsonPrimitive)?.content
@@ -50,7 +54,7 @@ class GroupGovernanceGuard(private val groups: GroupChatRepository, private val 
             HarnessTool.PLAN, HarnessTool.SCRATCHPAD, HarnessTool.ASK_USER, HarnessTool.LOAD_RULE,
             HarnessTool.LOAD_SKILL, HarnessTool.COMPRESS)
         private val TEAM_TOOLS = setOf("list-bots", "list-assignments", "inspect-assignment", "assign-task",
-            "continue-assignment", "cancel-assignment", "report-assignment", "send-member-message", "list-member-inboxes", "list-models", "select-model",
+            "continue-assignment", "cancel-assignment", "report-assignment", "send-member-message", "list-member-inboxes", "read-member-inbox", "list-models", "select-model",
             "inspect-governance", "submit-proposal", "review-proposal")
     }
 }

@@ -193,7 +193,85 @@ internal val toolBackendModule = module {
         )
     }
     single { top.wkbin.taixu.harness.config.createAppConfigBackend(top.wkbin.taixu.core.datastore.AgentConfigPreferences(get()), get()) }
-    single { top.wkbin.taixu.harness.team.createTeamBackend(get(), get(), get(), get(), { get() }, { get() }, { get() }, get()) }
+    single { top.wkbin.taixu.harness.team.createTeamBackend(get(), get(), get(), get(), { get() }, { get() }, { get() }, get(), sessions = get(),
+        suggestions = get(), managementEnabled = { top.wkbin.taixu.core.datastore.AiAdminPreferences(get()).enabled.first() }) }
+    single { top.wkbin.taixu.harness.admin.createBoundAppAdminBackend(
+        get(), get(), get(), get(), get(), { get() }, { get() }, get(), runtimeRepository = get(), models = get(), remoteServers = get(), plugins = { get() }) }
+    single { top.wkbin.taixu.harness.admin.model.createModelManagementBackend(get(),
+        top.wkbin.taixu.harness.admin.model.NativeModelAdminAuthority(get(), get(), get(), get()), get()) }
+    single { top.wkbin.taixu.harness.admin.createSessionManagementBackend(get(), get(), get(), get(), { get() },
+        nativeOwnership = { id -> get<top.wkbin.taixu.harness.admin.NativeSessionOwnership>().owns(id) }, persistence = get()) }
+    single { top.wkbin.taixu.harness.admin.rules.UserRulesBackend(get(), object : top.wkbin.taixu.harness.admin.rules.RuleManagementAuthority {
+        private val native = top.wkbin.taixu.harness.admin.model.NativeModelAdminAuthority(get(), get(), get(), get())
+        override suspend fun requireNativeMainActor(actor: top.wkbin.taixu.harness.admin.rules.RuleManagementActor) {
+            check(native.isControlledUserSession(top.wkbin.taixu.harness.admin.model.ModelAdminActor(actor.sessionId, actor.operationId, "rules")))
+        }
+    }) }
+    single { top.wkbin.taixu.harness.rules.UserRuleToolGuard(get(), get(), get()) }
+    single {
+        val sessions = get<top.wkbin.taixu.core.database.HarnessSessionRepository>()
+        top.wkbin.taixu.harness.admin.runtime.createRuntimeAdmin(get(), get(),
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
+            top.wkbin.taixu.harness.admin.model.NativeModelAdminAuthority(get(), get(), get(), get()),
+            workspace = { id -> requireNotNull(sessions.findById(id)).workspace.also { require(it.isNotBlank()) } },
+            journal = top.wkbin.taixu.harness.admin.runtime.RuntimeOperationJournal(java.io.File(get<android.content.Context>().filesDir, "management-runtime-operations")))
+    }
+    single {
+        top.wkbin.taixu.harness.admin.runtime.NativeRuntimeImportController(
+            get<android.content.Context>().contentResolver,
+            top.wkbin.taixu.runtime.admin.PrivateNativeImportStore(
+                java.io.File(get<android.content.Context>().filesDir, "management-runtime-imports")),
+            get(),
+            get(), get(), get(), get(), get(),
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
+        )
+    }
+    single {
+        val native = top.wkbin.taixu.harness.admin.model.NativeModelAdminAuthority(get(),get(),get(),get())
+        top.wkbin.taixu.harness.admin.packages.createPackageManagement(get(),get(),get(),get(),get(),get(),get(),
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO),
+            object : top.wkbin.taixu.harness.admin.packages.PackageAdminAuthority {
+                override suspend fun isNativeMainBuild(actor: top.wkbin.taixu.harness.admin.packages.PackageAdminActor) =
+                    native.isControlledUserSession(top.wkbin.taixu.harness.admin.model.ModelAdminActor(actor.sessionId,actor.operationId,"package")) &&
+                        !native.isPlan(top.wkbin.taixu.harness.admin.model.ModelAdminActor(actor.sessionId,actor.operationId,"package"))
+            }, skillRoot = java.io.File(get<top.wkbin.taixu.runtime.RuntimePathManager>().attachmentsDir,"skills"),
+            registryPreferences = top.wkbin.taixu.core.datastore.RegistryPreferences(get()),
+            nativeSkillRoots = {
+                val paths=get<top.wkbin.taixu.runtime.RuntimePathManager>()
+                top.wkbin.taixu.core.database.AgentSkillRepository.standardScanRoots(paths.attachmentsDir,paths.workspaceDir)
+            })
+    }
+    single { top.wkbin.taixu.core.tools.admin.NativePackageCandidateStore(java.io.File(get<android.content.Context>().filesDir,"management-package-candidates")) }
+    single { top.wkbin.taixu.core.tools.admin.NativeReviewedPluginService(get(),get(),
+        top.wkbin.taixu.core.tools.admin.PackageOperationJournal(java.io.File(get<android.content.Context>().filesDir,"management-packages/native-plugin"))) }
+    single { top.wkbin.taixu.core.tools.admin.NativeReviewedSkillService(get(),get(),get(),
+        java.io.File(get<top.wkbin.taixu.runtime.RuntimePathManager>().attachmentsDir,"skills"),
+        top.wkbin.taixu.core.tools.admin.PackageOperationJournal(java.io.File(get<android.content.Context>().filesDir,"management-packages/native-skill"))) }
+    single { top.wkbin.taixu.core.datastore.AiAdminPreferences(get()) }
+    single { top.wkbin.taixu.harness.admin.nativeui.NativeManagementQueue() }
+    single { top.wkbin.taixu.harness.admin.model.NativeModelEditorRequests() }
+    single<top.wkbin.taixu.harness.admin.model.ModelNativeFormBridge> {
+        val prefs = top.wkbin.taixu.core.datastore.AiAdminPreferences(get())
+        val sessions = get<top.wkbin.taixu.core.database.HarnessSessionRepository>()
+        val ownership = get<top.wkbin.taixu.harness.admin.NativeSessionOwnership>()
+        val bots = get<top.wkbin.taixu.core.database.repository.PersonaBotRepository>()
+        val tasks = get<top.wkbin.taixu.core.database.repository.BotAssignmentRepository>()
+        val editors = get<top.wkbin.taixu.harness.admin.model.NativeModelEditorRequests>()
+        top.wkbin.taixu.harness.admin.model.ModelNativeFormBridge(
+            launcher = top.wkbin.taixu.harness.admin.nativeui.QueuedModelNativeFormLauncher(get(), { get() },
+                { request -> editors.openFromNative(request) }),
+            authorize = { id ->
+                val row = sessions.findById(id)
+                row != null && row.runMode == "build" && ownership.owns(id) &&
+                    tasks.assignmentForSession(id) == null && bots.getBotBySessionId(id) == null &&
+                    id !in bots.observeGroupSessionRefs().first()
+            },
+            managementSnapshot = { prefs.snapshot.first() },
+            withNativeWriteBoundary = { block -> prefs.withManagementSnapshot { live ->
+                check(live.first); block()
+            } })
+    }
+
     single<ToolExecutor> {
         ToolExecutor(
             fileAccess = get(),
@@ -222,7 +300,8 @@ internal val toolBackendModule = module {
             toolCheckpoints = get(),
             workspaceToolBackend = get(), governanceGuard = get(),
             environments = get(),
-            appConfigBackend = get(), teamBackend = get(),
+            appConfigBackend = get(), teamBackend = get(), workflowAdminBackend = get(), modelAdminBackend = get(), nativeModelForms = get(), sessionManagementBackend = get(), userRulesBackend = get(), userRuleGuard = get(), runtimeAdmin = get(), packageAdmin = get(),
+            managementActorGuard = top.wkbin.taixu.harness.admin.ManagementActorGuard(get()),
             appModulesBackend = { id ->
                 val session = requireNotNull(get<top.wkbin.taixu.core.database.HarnessSessionRepository>().findById(id))
                 val model = get<top.wkbin.taixu.harness.ProviderClient>().resolveConfigured(session.modelId, session.modelVariant)

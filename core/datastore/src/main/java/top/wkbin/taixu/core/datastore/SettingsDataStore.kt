@@ -565,6 +565,40 @@ class SettingsDataStore(
             .distinct()
     }
 
+    suspend fun markCredentialRetirement(secretRef: String) {
+        require(secretRef.matches(Regex("[a-zA-Z0-9_-]{8,80}")))
+        val journal = stringPreferencesKey("model_credential_retirements_encrypted")
+        context.settingsDataStore.edit { prefs ->
+            val previous=prefs[journal]?.let { encrypted ->
+                requireNotNull(secretManager.decrypt(encrypted)) { "凭据退役记录不可解密，未覆盖" }
+            }?.let { environmentJson.decodeFromString<Map<String,Long>>(it) }.orEmpty()
+            if(secretRef !in previous) prefs[journal]=secretManager.encrypt(
+                environmentJson.encodeToString(previous + (secretRef to System.currentTimeMillis())))
+        }
+    }
+
+    /** Caller holds native model lifetime lock and supplies the current Room reference set.
+     * Delete encrypted values and retirement markers in the same DataStore edit. */
+    suspend fun eraseRetiredModelKeys(referenced: Set<String>): Int {
+        val journal=stringPreferencesKey("model_credential_retirements_encrypted")
+        var count=0
+        context.settingsDataStore.edit { prefs ->
+            val records=prefs[journal]?.let { encrypted ->
+                environmentJson.decodeFromString<Map<String,Long>>(requireNotNull(secretManager.decrypt(encrypted)))
+            }.orEmpty()
+            val expired=records.keys-referenced
+            expired.forEach { reference ->
+                require(reference.matches(Regex("[a-zA-Z0-9_-]{8,80}")))
+                prefs.remove(stringPreferencesKey("model_api_key_$reference"))
+            }
+            val remaining=records.filterKeys { it in referenced }
+            if(remaining.isEmpty()) prefs.remove(journal)
+            else prefs[journal]=secretManager.encrypt(environmentJson.encodeToString(remaining))
+            count=expired.size
+        }
+        return count
+    }
+
     suspend fun removeModelApiKey(secretRef: String) {
         if (secretRef.isBlank()) return
         context.settingsDataStore.edit { it.remove(stringPreferencesKey("model_api_key_$secretRef")) }

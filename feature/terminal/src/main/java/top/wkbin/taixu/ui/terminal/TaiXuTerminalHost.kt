@@ -19,7 +19,10 @@ import com.termux.view.TerminalView
  * preceding text and keep backspace auto-repeat working. Touch/scroll still go to
  * the inner TerminalView; key/IME bytes go to its attached session.
  */
-class TaiXuTerminalHost(context: Context) : FrameLayout(context) {
+class TaiXuTerminalHost(
+    context: Context,
+    private val writeInput: (com.termux.terminal.TerminalSession, ByteArray) -> Unit,
+) : FrameLayout(context) {
 
     val terminalView: TerminalView = TerminalView(context, null).apply {
         isFocusable = false
@@ -42,6 +45,21 @@ class TaiXuTerminalHost(context: Context) : FrameLayout(context) {
     }
 
     override fun onCheckIsTextEditor(): Boolean = true
+
+    // The host owns focus: forward physical keys without replacing Termux's Unicode,
+    // dead-key, modifiers or application-cursor handling. Session enqueue is guarded.
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        terminalView.onKeyDown(keyCode, event) || super.onKeyDown(keyCode, event)
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        terminalView.onKeyUp(keyCode, event) || super.onKeyUp(keyCode, event)
+
+    override fun onKeyPreIme(keyCode: Int, event: KeyEvent): Boolean =
+        terminalView.onKeyPreIme(keyCode, event) || super.onKeyPreIme(keyCode, event)
+
+    override fun onKeyMultiple(keyCode: Int, repeatCount: Int, event: KeyEvent): Boolean =
+        terminalView.onKeyDown(keyCode, event) || super.onKeyMultiple(keyCode, repeatCount, event)
+
 
     fun startTextSelection(event: MotionEvent) {
         if (terminalView.mEmulator == null || terminalView.isSelectingText) return
@@ -139,7 +157,7 @@ class TaiXuTerminalHost(context: Context) : FrameLayout(context) {
             private fun writeBytes(bytes: ByteArray) {
                 val session = terminalView.currentSession ?: return
                 if (!session.isRunning || bytes.isEmpty()) return
-                session.write(bytes, 0, bytes.size)
+                writeInput(session, bytes)
             }
         }
     }

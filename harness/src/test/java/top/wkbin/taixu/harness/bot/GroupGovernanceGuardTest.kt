@@ -38,6 +38,14 @@ class GroupGovernanceGuardTest {
         groups.saveTeam("g", mapOf("worker" to "executor"))
         groups.saveGovernance("g", GroupGovernance(listOf(rule)))
     }
+    @Test fun memberCanRequestManagementReviewButCannotApplyOrAdopt(): Unit = runBlocking {
+        seed()
+        val request = buildJsonObject { put("action", "suggest"); put("groupId", "g") }
+        assertNull(guard.blockReason("group-author", call(HarnessTool.TEAM, args=request)))
+        assertNotNull(guard.blockReason("group-author", call(HarnessTool.TEAM, args=buildJsonObject { put("action", "adopt") })))
+        assertNotNull(guard.blockReason("group-author", call(HarnessTool.TEAM, args=buildJsonObject { put("action", "apply") })))
+    }
+
     private fun call(tool: HarnessTool, raw: String? = null, args: JsonObject = JsonObject(emptyMap())) =
         ToolCall("call", 1, tool, args, rawToolName = raw)
     private fun capability(action: String = "call", server: String = "plugin.taixu.bot-management", tool: String = "inspect-governance") =
