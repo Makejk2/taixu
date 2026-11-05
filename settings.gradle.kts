@@ -42,10 +42,13 @@ dependencyResolutionManagement {
         maven {
             url = uri(rootDir.resolve("repo"))
         }
-        // A2UI alpha 的元数据与 AAR 在镜像上可能不同步；整个组固定走官方源，
-        // 避免 Gradle 选中镜像元数据后因缺少 AAR 而无法回退到 google()。
+        // A2UI alpha：优先官方源；镜像已确认同时提供元数据与 AAR 时按声明顺序回退，
+        // 兼容无法直连 dl.google.com 的构建环境（沙箱实测镜像 AAR 返回 200）。
         exclusiveContent {
-            forRepository { google() }
+            forRepository {
+                google()
+                maven { url = uri("https://maven.aliyun.com/repository/google") }
+            }
             filter {
                 includeGroupByRegex("androidx\\.a2ui(\\..*)?")
                 includeModule("androidx.compose.material3", "material3-a2ui")

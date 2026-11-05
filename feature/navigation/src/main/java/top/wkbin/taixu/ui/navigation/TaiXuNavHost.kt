@@ -32,6 +32,7 @@ import top.wkbin.taixu.ui.developer.AdbLogcatScreen
 import top.wkbin.taixu.ui.home.HomeScreen
 import top.wkbin.taixu.ui.settings.AgentSettingsScreen
 import top.wkbin.taixu.ui.settings.ModelEditorScreen
+import top.wkbin.taixu.ui.settings.NativeModelEditorRouteEffects
 import top.wkbin.taixu.ui.settings.ModelProfilesScreen
 import top.wkbin.taixu.ui.settings.LocalLlmScreen
 import top.wkbin.taixu.ui.settings.SettingsScreen
@@ -111,13 +112,11 @@ fun TaiXuNavHost(
     fun NavBackStack<NavKey>.pushRaw(destination: NavKey) {
         if (lastOrNull() != destination) add(destination)
     }
-    val managementEditor = koinInject<top.wkbin.taixu.harness.admin.model.NativeModelEditorRequests>()
-    val managementRequest by managementEditor.current.collectAsStateWithLifecycle()
-    LaunchedEffect(managementRequest?.requestId) {
-        managementRequest?.let { request ->
-            activeStack.pushRaw(ModelEditorDestination(request.modelId, request.requestId))
-        }
-    }
+    // 原生模型表单导航效果由 settings 模块 NativeModelEditorRouteEffects 承接，
+    // 通过回调把目标推入本层导航栈，避免 navigation 直依赖 harness（架构白名单）。
+    NativeModelEditorRouteEffects(onOpen = { modelId, requestId ->
+        activeStack.pushRaw(ModelEditorDestination(modelId, requestId))
+    })
     val sidebarGesturesEnabled = activeStack.canSwipeOpenNavigation()
     LaunchedEffect(sidebarGesturesEnabled) { if (!sidebarGesturesEnabled) showNavigation = false }
     val selectedMain = activeStack.lastOrNull { it == HomeDestination || it == WorkspaceDestination || it == BotsDestination || it == SettingsDestination }.toMainDestination()
@@ -125,14 +124,12 @@ fun TaiXuNavHost(
         if (activeStack.openMainOverlay(destination)) return
         if (destination == MainDestination.Agent) while (activeStack.size > 1) activeStack.removeLastOrNull()
     }
-
     LaunchedEffect(chatViewModel) {
         chatViewModel.workflowLaunchRequests.collect { request ->
             navigateMain(MainDestination.Agent)
             activeStack.pushRaw(WorkflowDestination(request.projectName, request.workflowId, request.initialVariables))
         }
     }
-
     LaunchedEffect(globalNavigationBus) {
         globalNavigationBus?.events?.collect { target ->
             when (target) {
@@ -157,17 +154,14 @@ fun TaiXuNavHost(
             globalNavigationBus.clearLatest(target)
         }
     }
-
     fun NavBackStack<NavKey>.push(from: NavKey, destination: NavKey) {
         if (lastOrNull() == from && lastOrNull() != destination) {
             add(destination)
         }
     }
-
     fun popBack() {
         if (activeStack.size > 1) activeStack.removeLastOrNull()
     }
-
     @Composable
     fun GuardedEntry(
         destination: NavKey,
@@ -192,7 +186,6 @@ fun TaiXuNavHost(
             content()
         }
     }
-
     val appEntryProvider: (NavKey) -> NavEntry<NavKey> = entryProvider {
             entry<HomeDestination> {
                 GuardedEntry(HomeDestination) {
@@ -694,7 +687,6 @@ fun TaiXuNavHost(
             entry<BotDetailDestination> { destination -> GuardedEntry(destination) { top.wkbin.taixu.ui.bot.BotDetailScreen(botId = destination.botId, onBack = ::popBack, onOpenSession = { sessionId -> chatViewModel.switchSession(sessionId); navigateMain(MainDestination.Agent) }) } }
             entry<GroupChatDestination> { destination -> GuardedEntry(destination) { top.wkbin.taixu.ui.bot.GroupChatScreen(groupId = destination.groupId, onBack = ::popBack, onOpenBot = { activeStack.pushRaw(BotDetailDestination(it)) }) } }
     }
-
     // Keep entry state and ViewModels across pushes and pops in the shared navigation stack.
     // Explicit <NavKey>: outside NavDisplay's parameter context, listOf cannot infer T.
     val entryDecorators = listOf(rememberSaveableStateHolderNavEntryDecorator<NavKey>(), rememberViewModelStoreNavEntryDecorator<NavKey>())
@@ -718,5 +710,4 @@ fun TaiXuNavHost(
         }
     }
 }
-
 private data class HealingTask(val title: String, val prompt: String)

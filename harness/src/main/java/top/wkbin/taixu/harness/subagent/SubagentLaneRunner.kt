@@ -344,45 +344,6 @@ class SubagentLaneRunner(
 }
 
 /**
- * 未被接受为完成时的汇总正文：先说清为什么没完成，再交出可操作的交接信息，
- * 最后附上子智能体的原始输出。父智能体据此能直接接手，而不是只看到一句"失败"。
- */
-internal fun laneSummary(
-    verdict: SubagentConclusionVerdict,
-    roundText: String,
-    deferredApprovals: List<SubagentApprovalHandoff>,
-    blockedWrites: List<String>,
-    failedWrites: Map<String, String> = emptyMap(),
-): String {
-    if (verdict.accepted) return roundText
-    return buildString {
-        appendLine("⚠️ 子任务未确认完成：${verdict.reason}")
-        if (deferredApprovals.isNotEmpty()) {
-            appendLine()
-            appendLine("**需要主智能体在主会话重新发起并完成审批的调用**（后台 Lane 无法暂停等待审批）：")
-            deferredApprovals.forEach { handoff ->
-                appendLine("- `${handoff.toolName}` 参数：${handoff.argumentsJson}")
-            }
-        }
-        if (blockedWrites.isNotEmpty()) {
-            appendLine()
-            appendLine("**被写租约拦截、实际未落盘的写入**：${blockedWrites.joinToString("、")}")
-            appendLine("重新派发时请为该子任务声明 write_paths，或由主智能体自行写入。")
-        }
-        if (failedWrites.isNotEmpty()) {
-            appendLine()
-            appendLine("**未确认成功的写入目标**（可能已部分写入，请按各项说明核验）：")
-            failedWrites.forEach { (target, reason) -> appendLine("- $target → $reason") }
-        }
-        if (roundText.isNotBlank()) {
-            appendLine()
-            appendLine("子智能体最后输出：")
-            append(roundText)
-        }
-    }.trim()
-}
-
-/**
  * Lane 请求消息组装。
  *
  * 与主循环的 ApiContextAssembler 对齐两件事：

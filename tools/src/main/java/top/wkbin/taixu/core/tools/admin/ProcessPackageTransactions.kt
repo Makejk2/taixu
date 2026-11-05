@@ -28,7 +28,7 @@ class ProcessPackageTransactions(
         val fingerprint = PackageAdministration.digest(Json.encodeToString(candidate))
         return PackageSnapshot(PackageMetadata(module,id,candidate.version,
             installed?.state in setOf("INSTALLED","UPDATE_AVAILABLE"),candidate.source == "BUILTIN",fingerprint),
-            target,fingerprint,candidate.sha256,candidate.permissions.toSet(),candidate.source,emptySet(),
+            target,fingerprint,null,candidate.permissions.toSet(),candidate.source,emptySet(),
             installed?.installedVersion, installed?.state)
     }
     override suspend fun execute(owner: String, change: PackageChange, authorize: suspend () -> Boolean): PackageOperation {

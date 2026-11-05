@@ -46,7 +46,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-
 class LinuxRuntimeImpl(
     private val pathManager: RuntimePathManager,
     private val prootInstaller: ProotInstaller,
@@ -101,7 +100,6 @@ class LinuxRuntimeImpl(
         }
         _installedDistros.value = list
     }
-
     override suspend fun switchActiveDistro(distroId: String): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; switchDistroLocked(distroId) }
     private suspend fun switchDistroLocked(distroId: String): AppResult<Unit> = run {
         val safeId = distroId.lowercase().trim()
@@ -117,7 +115,6 @@ class LinuxRuntimeImpl(
         logger.i("Switched active Linux distro to $safeId")
         AppResult.Success(Unit)
     }
-
     override suspend fun installDistro(
         request: RuntimeInstallRequest,
         onProgress: suspend (DownloadProgress) -> Unit,
@@ -140,7 +137,6 @@ class LinuxRuntimeImpl(
             logger.i("Distro $distroId installed successfully")
             AppResult.Success(Unit)
     }
-
     override suspend fun importDistro(
         request: RuntimeInstallRequest,
         archive: File,
@@ -194,7 +190,6 @@ class LinuxRuntimeImpl(
                 AppResult.Failure(AppError(ErrorCode.INSTALLATION_FAILED, throwable.message ?: "导入失败", throwable))
             }
         }
-
     override suspend fun uninstallDistro(distroId: String): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; uninstallDistroLocked(distroId) }
     private suspend fun uninstallDistroLocked(distroId: String): AppResult<Unit> = run {
         withRuntimeMaintenance {
@@ -226,7 +221,6 @@ class LinuxRuntimeImpl(
             res
         }
     }
-
     override suspend fun resetSandbox(distroId: String?): AppResult<Unit> = initializeMutex.withLock { managementGeneration++; resetSandboxLocked(distroId) }
     private suspend fun resetSandboxLocked(distroId: String?): AppResult<Unit> = run {
         withRuntimeMaintenance {
@@ -268,14 +262,12 @@ class LinuxRuntimeImpl(
             }
         }
     }
-
     override suspend fun initialize(request: RuntimeInstallRequest): AppResult<Unit> = initializeMutex.withLock {
         managementGeneration++
         withContext(Dispatchers.IO) {
             if (_state.value is RuntimeState.Ready) {
                 return@withContext AppResult.Success(Unit)
             }
-
             try {
                 updateInitializing("detectArchitecture", 0f)
                 val architecture = detectArchitecture()
@@ -286,14 +278,11 @@ class LinuxRuntimeImpl(
                     _state.value = RuntimeState.Error(RuntimeArchitectureException(message))
                     return@withContext AppResult.Failure(error)
                 }
-
                 updateInitializing("checkStorage", 0.05f)
                 checkStorage()
-
                 updateInitializing("createDirectories", 0.1f)
                 pathManager.ensureDirectories()
                 pathManager.cleanupStalePtyMarkers(request.distributionId)
-
                 updateInitializing("校验运行引擎", 0.15f, "校验 PRoot 主程序、外置 loader 与 ARM64 架构")
                 val prootResult = prootInstaller.install()
                 val prootError = prootResult.errorOrNull()
@@ -301,7 +290,6 @@ class LinuxRuntimeImpl(
                     failInitialization(prootError)
                     return@withContext AppResult.Failure(prootError)
                 }
-
                 val distroId = request.distributionId.lowercase().trim()
                 val distribution = DistributionCatalog.require(distroId)
                 updateInitializing("下载 ${distribution.displayName}", 0.2f, "通过 proot-distro 5.10.0 OCI 机制下载 linux/arm64 镜像")
@@ -314,19 +302,14 @@ class LinuxRuntimeImpl(
                     failInitialization(rootfsError)
                     return@withContext AppResult.Failure(rootfsError)
                 }
-
                 updateInitializing("configureRootfs", 0.75f)
                 distroConfigurator.configureRootfs(distroId)
-
                 updateInitializing("configureDns", 0.8f)
                 distroConfigurator.configureDns(distroId)
-
                 updateInitializing("configureEnvironment", 0.85f)
                 distroConfigurator.configureEnvironment(distroId)
-
                 updateInitializing("createWorkspace", 0.9f)
                 createWorkspace()
-
                 updateInitializing("runHealthCheck", 0.95f)
                 val health = healthChecker.check()
                 if (!health.isHealthy) {
@@ -336,11 +319,9 @@ class LinuxRuntimeImpl(
                     failInitialization(error)
                     return@withContext AppResult.Failure(error)
                 }
-
                 _activeDistroId.value = distroId
                 settingsDataStore.setSelectedDistribution(distroId)
                 refreshInstalledDistros()
-
                 hostBridge.start()
                 _state.value = RuntimeState.Ready
                 logger.i("Linux runtime initialized and ready with distro: $distroId")
@@ -364,7 +345,6 @@ class LinuxRuntimeImpl(
             }
         }
     }
-
     override suspend fun restoreInstalledState(): Boolean = initializeMutex.withLock {
         managementGeneration++
         withContext(Dispatchers.IO) {
@@ -372,7 +352,6 @@ class LinuxRuntimeImpl(
             return@withContext true
         }
         val selectedDistroId = runCatching { settingsDataStore.selectedDistribution.first() }.getOrDefault("ubuntu")
-
         if (!pathManager.isRootfsInstalled()) {
             logger.i("Restore skipped: rootfs marker or validator check failed (fresh install?)")
             return@withContext false
@@ -383,13 +362,11 @@ class LinuxRuntimeImpl(
             _state.value = RuntimeState.Error(IllegalStateException(message))
             return@withContext false
         }
-
         val installedList = pathManager.listInstalledDistroIds()
         val effectiveDistro = if (selectedDistroId in installedList) selectedDistroId else installedList.firstOrNull() ?: selectedDistroId
         pathManager.ensureDistroDirectories(effectiveDistro)
         _activeDistroId.value = effectiveDistro
         refreshInstalledDistros()
-
         val health = try {
             healthChecker.check()
         } catch (cancellation: CancellationException) {
@@ -417,7 +394,6 @@ class LinuxRuntimeImpl(
         true
         }
     }
-
     override suspend fun updateRootfs(distroId: String?): AppResult<Unit> = updateRootfsBound(distroId, null)
     override suspend fun updateRootfsApproved(distroId: String, manifestDigest: String): AppResult<Unit> =
         updateRootfsBound(distroId, manifestDigest)
@@ -442,7 +418,6 @@ class LinuxRuntimeImpl(
                     _state.value = RuntimeState.Error(error.cause ?: IllegalStateException(error.message))
                     return@withRuntimeMaintenance AppResult.Failure(error)
                 }
-
                 updateInitializing("configureRootfs", 0.75f)
                 distroConfigurator.configureRootfs(targetDistro)
                 distroConfigurator.configureDns(targetDistro)
@@ -481,7 +456,6 @@ class LinuxRuntimeImpl(
             }
         }
     }
-
     private fun managementSnapshotLocked(target: String, workspace: String): top.wkbin.taixu.runtime.admin.DistroResourceSnapshot {
         DistributionCatalog.require(target)
         require(workspace == "/workspace" || workspace.startsWith("/workspace/"))
@@ -511,7 +485,6 @@ class LinuxRuntimeImpl(
                 withRuntimeMaintenance { mutation.archive.withVerifiedArchive { importDistroLocked(mutation.request, it) } }
         }
     }
-
     override suspend fun checkRootfsUpdate(distroId: String?): AppResult<RootfsUpdateInfo> =
         withContext(Dispatchers.IO) {
             if (_state.value !is RuntimeState.Ready) {
@@ -529,11 +502,9 @@ class LinuxRuntimeImpl(
                 },
             )
         }
-
     override suspend fun healthCheck(distroId: String?): RuntimeHealth = withContext(Dispatchers.IO) {
         healthChecker.check()
     }
-
     override suspend fun execute(command: ShellCommand, distroId: String?): CommandResult = storageActivities.activity {
         ensureReady()
         val safeDistro = boundLocalDistribution(distroId, _activeDistroId.value)
@@ -578,13 +549,11 @@ class LinuxRuntimeImpl(
             optDir = taixuRoot,
         )
     }
-
     private data class ExecutionLayout(
         val rootfsDir: File,
         val emulatorBinary: File?,
         val optDir: File,
     )
-
     override suspend fun startSession(config: SessionConfig, distroId: String?): LinuxSession = storageActivities.activity {
         val prepared = prepareInteractiveSession(config, distroId)
         try {
@@ -599,7 +568,6 @@ class LinuxRuntimeImpl(
             throw throwable
         }
     }
-
     override suspend fun buildInteractiveLaunch(
         config: SessionConfig,
         distroId: String?,
@@ -623,7 +591,6 @@ class LinuxRuntimeImpl(
             environment = mergedEnv.map { "${it.key}=${it.value}" }.toTypedArray(),
         )
     }
-
     private data class PreparedInteractive(
         val distroId: String,
         val effectiveConfig: SessionConfig,
@@ -633,7 +600,6 @@ class LinuxRuntimeImpl(
         val markerFile: File,
         val markerPath: String,
     )
-
     private suspend fun prepareInteractiveSession(
         config: SessionConfig,
         distroId: String?,
@@ -704,10 +670,8 @@ class LinuxRuntimeImpl(
             markerPath = markerPath,
         )
     }
-
     private suspend fun storageMounts(): List<StorageMountBinding> =
         resolveStorageMounts(settingsDataStore, storageMountBindingRepository, logger)
-
     private suspend fun resizePty(markerPath: String, columns: Int, rows: Int, distroId: String = "ubuntu") {
         val safeColumns = columns.coerceIn(20, 400)
         val safeRows = rows.coerceIn(5, 200)
@@ -733,7 +697,6 @@ class LinuxRuntimeImpl(
             )
         }
     }
-
     override suspend fun startBackground(
         id: String,
         command: ShellCommand,
@@ -752,23 +715,17 @@ class LinuxRuntimeImpl(
             mounts = mounts,
         )
     }
-
     override suspend fun stopBackground(id: String): Boolean = processRegistry.stop(id)
     override val supportsBackgroundInstanceStop = true
     override suspend fun stopBackgroundInstance(process: ManagedProcess): Boolean = processRegistry.stopInstance(process)
-
     override fun listBackground(): List<ManagedProcess> = processRegistry.list()
-
     override suspend fun cleanupDeadBackground(): Int = processRegistry.cleanupDeadProcesses()
     override suspend fun reclaimListeningPort(port: Int, protectedSessions: Set<Long>): Int =
         processRegistry.reclaimListeningPort(port, protectedSessions + interactiveSessions.rootPids() + shellExecutor.pendingRootPids())
-
     override fun observeBackgroundLogs(idOrToolId: String): Flow<List<String>> =
         processRegistry.observeLogs(idOrToolId)
-
     override fun getBackgroundLogs(idOrToolId: String): List<String> =
         processRegistry.getLogs(idOrToolId)
-
     override fun clearBackgroundLogs(idOrToolId: String) = processRegistry.clearLogs(idOrToolId)
 
     override suspend fun shutdown() = initializeMutex.withLock { managementGeneration++; withRuntimeMaintenance {

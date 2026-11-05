@@ -82,9 +82,7 @@ import top.wkbin.taixu.ui.settings.skill.SkillSecurityAuditDialog
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import top.wkbin.taixu.core.datastore.AgentPreferences
-
 enum class AgentSettingsCategory { EXECUTION, SUBAGENTS, SKILLS }
-
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun AgentSettingsScreen(

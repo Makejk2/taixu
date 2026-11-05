@@ -32,7 +32,6 @@ interface HarnessSessionRepository {
     /** Only the native user-session constructor calls this; no inference from absent bot records. */
     suspend fun registerNativeUserSession(id: String) { error("SESSION_PROVENANCE_UNAVAILABLE") }
 }
-
 interface WorkspaceRepository {
     fun observeAll(): Flow<List<WorkspaceEntity>>
     suspend fun listAll(): List<WorkspaceEntity>
@@ -40,7 +39,6 @@ interface WorkspaceRepository {
     suspend fun upsert(workspace: WorkspaceEntity)
     suspend fun delete(name: String)
 }
-
 interface TerminalSessionRepository {
     fun observeAll(): Flow<List<TerminalSessionEntity>>
     suspend fun listAll(): List<TerminalSessionEntity>

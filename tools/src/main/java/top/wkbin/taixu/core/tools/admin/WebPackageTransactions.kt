@@ -22,7 +22,7 @@ class WebPackageTransactions(private val registry: ToolRegistry, private val web
             return requireNotNull(other) { "PACKAGE_OWNER_NOT_COMPOSED" }.snapshot(module,id,target)
         val fingerprint=PackageAdministration.digest(Json.encodeToString(manifest))
         return PackageSnapshot(PackageMetadata(module,id,manifest.version,manifest.enabled,
-            manifest.source == "BUILTIN",fingerprint),target,fingerprint,manifest.sha256,
+            manifest.source == "BUILTIN",fingerprint),target,fingerprint,null,
             manifest.permissions.toSet(),manifest.source,emptySet(),manifest.version,"INSTALLED")
     }
     override suspend fun execute(owner: String,change: PackageChange,authorize: suspend () -> Boolean): PackageOperation {

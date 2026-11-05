@@ -163,7 +163,19 @@ class AgentSkillDirectorySyncTest {
 
     private class MemorySkillDao : AgentSkillDao {
         private val rows = MutableStateFlow<List<AgentSkillEntity>>(emptyList())
+        private val tombstones = MutableStateFlow<List<SkillDiscoveryTombstone>>(emptyList())
         override fun observeAll() = rows
+        override suspend fun findById(id: String): AgentSkillEntity? = rows.value.firstOrNull { it.id == id }
+        override suspend fun deleteCustomRow(id: String) {
+            rows.value = rows.value.filterNot { it.id == id && !it.isBuiltin }
+        }
+        override suspend fun rememberRemovedDirectory(row: SkillDiscoveryTombstone) {
+            tombstones.value += row
+        }
+        override suspend fun removedDirectories(): List<String> = tombstones.value.map { it.resourcePath }
+        override suspend fun allowDirectory(path: String) {
+            tombstones.value = tombstones.value.filterNot { it.resourcePath == path }
+        }
 
         override suspend fun insertAll(skills: List<AgentSkillEntity>) {
             rows.value += skills.filter { skill -> rows.value.none { it.id == skill.id } }

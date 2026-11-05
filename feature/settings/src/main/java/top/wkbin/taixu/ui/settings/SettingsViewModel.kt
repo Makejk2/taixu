@@ -99,8 +99,6 @@ import top.wkbin.taixu.runtime.LinuxRuntime
 import top.wkbin.taixu.runtime.RuntimeInstallRequest
 import top.wkbin.taixu.runtime.webchat.WebChatBridgeServer
 import top.wkbin.taixu.runtime.webchat.WebChatServerStatus
-
-
 class SettingsViewModel(
     private val application: Application,
     private val logger: AppLogger,
@@ -142,17 +140,13 @@ class SettingsViewModel(
     val installedDistros = linuxRuntime.installedDistros
     val activeDistroId = linuxRuntime.activeDistroId
     val runtimeState = linuxRuntime.state
-
     val environmentVariables = linuxEnvironmentManager.variables
     val environmentValues = linuxEnvironmentManager.values
     val effectiveEnvironment = linuxEnvironmentManager.effectiveEnvironment
-
     private val _environmentLoading = MutableStateFlow(false)
     val environmentLoading: StateFlow<Boolean> = _environmentLoading.asStateFlow()
-
     private val _environmentError = MutableStateFlow<String?>(null)
     val environmentError: StateFlow<String?> = _environmentError.asStateFlow()
-
     init {
         viewModelScope.launch {
             subagentRepository.ensureInitialized()
@@ -186,14 +180,11 @@ class SettingsViewModel(
                 }
         }
     }
-
     val environmentPrivacyMode: StateFlow<Boolean> = agentPreferences.environmentPrivacyMode
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-
     fun setEnvironmentPrivacyMode(enabled: Boolean) {
         viewModelScope.launch { agentPreferences.setEnvironmentPrivacyMode(enabled) }
     }
-
     fun addEnvironmentVariable(key: String, value: String, note: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             _environmentLoading.value = true
@@ -201,7 +192,6 @@ class SettingsViewModel(
             finishEnvironmentOperation(result, onResult)
         }
     }
-
     fun updateEnvironmentVariable(id: String, key: String, value: String?, note: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             _environmentLoading.value = true
@@ -209,7 +199,6 @@ class SettingsViewModel(
             finishEnvironmentOperation(result, onResult)
         }
     }
-
     fun deleteEnvironmentVariable(id: String) {
         viewModelScope.launch {
             _environmentLoading.value = true

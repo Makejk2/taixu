@@ -249,7 +249,7 @@ class WorkflowScheduler(
                         // 来源绑定运行必须先生效批准链重放与逐节点原生授权，之后才执行动作。
                         val source = lease.binding.source
                         if (source == null) action() else withWorkflowSourceAuthority(
-                            source, executionId, node.id, approvalBroker,
+                            source, context.executionId, node.id, approvalBroker,
                             onApprovalState = { waiting -> onProgress(
                                 if (waiting) NodeRunStatus.WAITING_APPROVAL else NodeRunStatus.RUNNING,
                                 if (waiting) "等待原生批准，未执行新动作" else "原生批准等待已结束") }, block = action)

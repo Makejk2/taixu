@@ -97,7 +97,6 @@ import top.wkbin.taixu.ui.components.RuntimeTextButton
 import top.wkbin.taixu.ui.components.RuntimeTopBar
 import java.util.Locale
 import top.wkbin.taixu.core.tools.ProviderProtocol
-
 /**
  * 模型编辑与连接测试全屏独立页面
  */
@@ -122,8 +121,6 @@ fun ModelEditorScreen(
     val nativeCoordinator = if (nativeRequestId != null) org.koin.compose.koinInject<top.wkbin.taixu.harness.admin.model.NativeModelEditorRequests>() else null
     val nativeBridge = if (nativeRequestId != null) org.koin.compose.koinInject<top.wkbin.taixu.harness.admin.model.ModelNativeFormBridge>() else null
     val nativeQueue = if (nativeRequestId != null) org.koin.compose.koinInject<top.wkbin.taixu.harness.admin.nativeui.NativeManagementQueue>() else null
-
-
     var initialApiKey by remember(modelId) { mutableStateOf("") }
     LaunchedEffect(modelId, existing?.secretRef) {
         val secretRef = existing?.secretRef
@@ -139,7 +136,6 @@ fun ModelEditorScreen(
             }
         }
     }
-
     var showImportJsonDialog by rememberSaveable { mutableStateOf(false) }
     val formRequest = nativeCoordinator?.current?.value?.takeIf { it.requestId == nativeRequestId }
     fun cancelNativeAndBack() {
@@ -198,7 +194,6 @@ fun ModelEditorScreen(
         )
         return
     }
-
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -310,7 +305,6 @@ fun ModelEditorScreen(
         )
     }
 }
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ModelEditorContent(
@@ -339,7 +333,6 @@ internal fun ModelEditorContent(
     val provider = providers.firstOrNull { it.id == providerId } ?: providers.first()
     var showProviderPicker by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable(modelId) { mutableStateOf(existing?.name.orEmpty()) }
-
     val existingModelList = remember(existing?.model) {
         existing?.model?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet().orEmpty()
     }
@@ -373,7 +366,6 @@ internal fun ModelEditorContent(
     var showBatchImportKeysDialog by rememberSaveable { mutableStateOf(false) }
     // Base URL 校验：必须以 http/https 开头
     val urlValid = url.trim().startsWith("http://") || url.trim().startsWith("https://")
-
     LaunchedEffect(initialApiKey) {
         if (keyList.all { it.isBlank() } && initialApiKey.isNotBlank()) {
             keyList = initialApiKey.lineSequence()
@@ -383,11 +375,9 @@ internal fun ModelEditorContent(
                 .ifEmpty { listOf("") }
         }
     }
-
     val combinedKey = remember(keyList) {
         keyList.map { it.trim() }.filter { it.isNotEmpty() }.joinToString("\n")
     }
-
     // 已选模型必须始终出现在候选列表中：否则厂商下架后刷新接口与预设都拿不到该模型，
     // 它会隐身存在于 selectedModels 里，既看不到也无法取消
     val candidateModels = remember(discovered, provider, selectedModels) {
@@ -396,19 +386,16 @@ internal fun ModelEditorContent(
     val filteredCandidateModels = remember(candidateModels, modelSearchQuery) {
         filterCandidateModels(candidateModels, modelSearchQuery)
     }
-
     /** 主流模型自动适配值；用户在输入框里填写的值仍然优先。 */
     val autoContextTokens = remember(selectedModels, customModelInput, provider.id) {
         val selected = selectedModels.firstOrNull()
             ?: customModelInput.substringBefore(',').trim().takeIf { it.isNotBlank() }
         selected?.let { modelId -> ModelContextWindows.resolve(modelId, provider.id) }
     }
-
     // 视觉开关属于整个档案，必须同时考虑已选和手填模型；未知模型保留默认的图片输入能力。
     val autoVisionInput = remember(selectedModels, customModelInput) {
         profileVisionInput(selectedModels + customModelInput.split(','))
     }
-
     // 高级与推理参数
     var rpmLimitText by rememberSaveable(modelId) {
         mutableStateOf(existing?.requestsPerMinutePerKey?.takeIf { it > 0 }?.toString().orEmpty())
@@ -435,11 +422,9 @@ internal fun ModelEditorContent(
     val keepRecentValid = isValidOptionalModelInteger(compactionKeepRecentText, 1)
     val reserveValid = isValidOptionalModelInteger(compactionReserveText, 1)
     var topP by rememberSaveable(modelId) { mutableFloatStateOf(existing?.topP ?: 1.0f) }
-
     var reasoningModeText by rememberSaveable(modelId) { mutableStateOf(existing?.reasoningMode ?: "auto") }
     var reasoningEffortText by rememberSaveable(modelId) { mutableStateOf(existing?.reasoningEffort.orEmpty()) }
     var reasoningModeMenu by rememberSaveable { mutableStateOf(false) }
-
     // 功能开关
     var toolCallEnabled by rememberSaveable(modelId) {
         mutableStateOf(existing?.toolCallMode != "disabled")
@@ -467,13 +452,10 @@ internal fun ModelEditorContent(
     var promptCacheTtl1h by rememberSaveable(modelId) {
         mutableStateOf(existing?.promptCacheTtl1h ?: false)
     }
-
     var customHeaders by rememberSaveable(modelId) { mutableStateOf(existing?.customHeaders.orEmpty()) }
-
     // 折叠区域控制
     var reasoningSectionExpanded by rememberSaveable { mutableStateOf(false) }
     var advancedSectionExpanded by rememberSaveable { mutableStateOf(false) }
-
     // 从 JSON 填充表单逻辑
     fun applyProfile(profile: AiModelProfileExport) {
         val matchedProvider = providers.firstOrNull { it.id.equals(profile.provider, ignoreCase = true) || it.name.equals(profile.provider, ignoreCase = true) }
@@ -512,7 +494,6 @@ internal fun ModelEditorContent(
         promptCacheTtl1h = profile.promptCacheTtl1h
         if (profile.customHeaders.isNotBlank()) customHeaders = profile.customHeaders
     }
-
     if (showBatchImportKeysDialog) {
         BatchImportKeysDialog(
             onDismiss = { showBatchImportKeysDialog = false },
@@ -535,7 +516,6 @@ internal fun ModelEditorContent(
             },
         )
     }
-
     if (showImportDialog) {
         QuickImportJsonDialog(
             onDismiss = onDismissImportDialog,
@@ -548,7 +528,6 @@ internal fun ModelEditorContent(
             },
         )
     }
-
     if (showProviderPicker) {
         ProviderPickerDialog(
             providers = providers,
@@ -565,7 +544,6 @@ internal fun ModelEditorContent(
             },
         )
     }
-
     LazyColumn(
         modifier = modifier.fillMaxSize().imePadding(),
         contentPadding = top.wkbin.taixu.ui.components.runtimeContentPadding(horizontal = 16.dp, top = 16.dp, bottom = 32.dp + bottomPadding),
@@ -585,7 +563,6 @@ internal fun ModelEditorContent(
                 onClick = { showProviderPicker = true },
             )
         }
-
         // ---- 2. 基础连接卡片 (Connection Info) ----
         item {
             RuntimeCard(
@@ -607,7 +584,6 @@ internal fun ModelEditorContent(
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
-
                     // 档案名称
                     RuntimeFilledTextField(
                         value = name,
@@ -620,7 +596,6 @@ internal fun ModelEditorContent(
                             RuntimeIcon(RuntimeIconName.Model, Modifier.size(18.dp), MaterialTheme.colorScheme.onSurfaceVariant)
                         },
                     )
-
                     // External providers use installed MCP metadata rather than a user URL.
                     if (provider.id.startsWith("plugin.")) LocalPluginProviderNotice() else RuntimeFilledTextField(
                         value = url,
@@ -664,7 +639,6 @@ internal fun ModelEditorContent(
                 }
             }
         }
-
         // ---- 3. API 凭证与密钥池 ----
         if (!provider.id.startsWith("plugin.") || combinedKey.isNotBlank()) item {
             RuntimeCard(
@@ -690,7 +664,6 @@ internal fun ModelEditorContent(
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                         }
-
                         Surface(
                             shape = MaterialTheme.shapes.extraSmall,
                             color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
@@ -703,7 +676,6 @@ internal fun ModelEditorContent(
                             )
                         }
                     }
-
                     // Key 列表
                     keyList.forEachIndexed { index, currentKey ->
                         val isRevealed = revealedKeyIndices.contains(index)
@@ -742,7 +714,6 @@ internal fun ModelEditorContent(
                                     }
                                 },
                             )
-
                             if (keyList.size > 1) {
                                 RuntimeIconButton(
                                     onClick = {
@@ -769,7 +740,6 @@ internal fun ModelEditorContent(
                             }
                         }
                     }
-
                     // 添加备用 Key / 批量导入：M3 标准按钮并排，主操作 tonal、次操作 outlined
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -794,7 +764,6 @@ internal fun ModelEditorContent(
                             }
                         }
                     }
-
                     Text(
                         text = "密钥将加密保存在本地 Android Keystore 中，明文不落库。",
                         style = MaterialTheme.typography.bodyMedium,
@@ -803,7 +772,6 @@ internal fun ModelEditorContent(
                 }
             }
         }
-
         // ---- 4. 模型选择与定制 ----
         item {
             RuntimeCard(
@@ -830,7 +798,6 @@ internal fun ModelEditorContent(
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                         }
-
                         if (totalSelectedCount > 0) {
                             Surface(
                                 shape = MaterialTheme.shapes.extraSmall,
@@ -845,7 +812,6 @@ internal fun ModelEditorContent(
                             }
                         }
                     }
-
                     if (candidateModels.isNotEmpty()) {
                         val candidateCount = candidateModels.size
                         Row(
@@ -866,7 +832,6 @@ internal fun ModelEditorContent(
                                 )
                             }
                         }
-
                         RuntimeFilledTextField(
                             value = modelSearchQuery,
                             onValueChange = { modelSearchQuery = it },
@@ -901,7 +866,6 @@ internal fun ModelEditorContent(
                                 }
                             },
                         )
-
                         // 流式布局自动横向换行；限制最大高度，模型过多时区域内部滚动，避免撑爆单 item 导致底部黑屏
                         if (filteredCandidateModels.isEmpty()) {
                             Text(
@@ -920,7 +884,6 @@ internal fun ModelEditorContent(
                             )
                         }
                     }
-
                     // 自定义模型输入
                     RuntimeFilledTextField(
                         value = customModelInput,
@@ -933,7 +896,6 @@ internal fun ModelEditorContent(
                 }
             }
         }
-
         // ---- 5. 推理与上下文调优 (Collapsible) ----
         item {
             RuntimeCard(
@@ -967,14 +929,12 @@ internal fun ModelEditorContent(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-
                     AnimatedVisibility(visible = reasoningSectionExpanded) {
                         Column(
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
                             // Temperature 滑块
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
@@ -1005,7 +965,6 @@ internal fun ModelEditorContent(
                                     PresetChip("1.2 创意", temperature == 1.2f) { temperature = 1.2f }
                                 }
                             }
-
                             // Max Tokens 与 Context Tokens 双列并排
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1046,7 +1005,6 @@ internal fun ModelEditorContent(
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 )
                             }
-
                             // Top P 滑块
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 Row(
@@ -1072,7 +1030,6 @@ internal fun ModelEditorContent(
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                             }
-
                             // 推理思考模式
                             ExposedDropdownMenuBox(
                                 expanded = reasoningModeMenu,
@@ -1108,7 +1065,6 @@ internal fun ModelEditorContent(
                 }
             }
         }
-
         // ---- 6. 高级特性与网络配置 (Collapsible) ----
         item {
             RuntimeCard(
@@ -1142,14 +1098,12 @@ internal fun ModelEditorContent(
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-
                     AnimatedVisibility(visible = advancedSectionExpanded) {
                         Column(
                             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-
                             // 单 Key 每分钟上限
                             RuntimeFilledTextField(
                                 value = rpmLimitText,

@@ -15,7 +15,6 @@ import top.wkbin.taixu.harness.ToolResult
 import top.wkbin.taixu.harness.UserMessage
 import top.wkbin.taixu.harness.isWholeWorkspaceWritePath
 import top.wkbin.taixu.harness.normalizeWritePath
-
 /**
  * 子智能体 Lane 的终止原因。
  *
@@ -25,41 +24,30 @@ import top.wkbin.taixu.harness.normalizeWritePath
 enum class SubagentTermination {
     /** 产出了可交付的纯文本结论，且没有被拦截的待办。 */
     CONCLUDED,
-
     /** 原Lane持久挂起，原工具尚未执行；不是完成或工具批准。 */
     POLICY_PAUSED,
-
     /** 收场了但没有可信结论（空输出、仍在调工具、或自述未完成）。 */
     INCOMPLETE,
-
     /** 有工具因需要审批而未执行，必须由主智能体重新发起。 */
     NEEDS_APPROVAL,
-
     /** 有写入被写租约拦截，产物并未真正落盘。 */
     WRITE_SCOPE_BLOCKED,
-
     /** 写入尝试过但最终失败，声称的产物并不存在。 */
     WRITE_FAILED,
-
     /** 文本工具调用无法解析，本轮既没执行工具也没有结论。 */
     UNPARSEABLE_TOOL_CALL,
-
     /** 用尽轮数预算仍未收束。 */
     MAX_ROUNDS,
-
     /** Lane 自身抛错。 */
     FAILED,
-
     /** 编排层超时取消。 */
     TIMEOUT,
-
     /**
      * 模型自报 complete，但完成 claim 的验收标准未被 host 凭据完全背书，
      * 已按规则降级为 partial（见 SubagentClaim.kt）。host 永不升格，只降级。
      */
     CLAIM_DOWNGRADED,
 }
-
 /**
  * 需要审批、因此在后台 Lane 中未执行的工具调用。
  * 结构化上交父智能体，让它能原样重发并在主会话里完成审批，而不是只看到一句失败文字。
@@ -69,14 +57,12 @@ data class SubagentApprovalHandoff(
     val argumentsJson: String,
     val reason: String,
 )
-
 /** 结论判定结果：是否接受为"已完成"，以及不接受的原因（会进 operation details 与父汇总）。 */
 data class SubagentConclusionVerdict(
     val accepted: Boolean,
     val termination: SubagentTermination,
     val reason: String,
 )
-
 /**
  * 子智能体自述未完成的措辞。命中即拒绝判定为成功——模型说"尚未完成""交由主智能体"时，
  * 任务事实上没做完，不能因为"这一轮没有工具调用"就渲染成 ✅。
@@ -99,7 +85,6 @@ internal val SUBAGENT_INCOMPLETE_MARKERS: List<String> = listOf(
     "could not complete",
     "was not completed",
 )
-
 /**
  * 完成判定的唯一入口。
  *
@@ -166,7 +151,6 @@ internal fun judgeSubagentConclusion(
     }
     return SubagentConclusionVerdict(accepted = true, termination = SubagentTermination.CONCLUDED, reason = "")
 }
-
 /**
  * 写租约执行期闸门：空租约拒结构化写与疑似 shell 写；`*`/`.` 整区放行；否则路径须落在租约内
  *（经 [normalizeWritePath]）。局部租约下 shell 写仍只靠 [detectSuspectedShellWrites] 软提示。
@@ -226,20 +210,17 @@ internal fun subagentWriteScopeRejection(
             "请只在租约范围内写入，或把内容作为结论返回由主智能体处理。"
     }
 }
-
 /**
  * 结构化写工具：写租约闸门与"写入最终失败"追踪共用的作用域。
  * 只读任务下 base/process 的疑似 shell 写也会被 [subagentWriteScopeRejection] 拦截，
  * 但不纳入本集合（无法可靠归因到具体路径）。
  */
 internal val LANE_WRITE_TOOLS = setOf(HarnessTool.WRITE, HarnessTool.EDIT, HarnessTool.DOWNLOAD)
-
 /** 被拦截写入的可读描述，用于汇总与完成判定。 */
 internal fun subagentWriteTargetLabel(rawToolName: String, args: JsonObject): String {
     val target = args.stringOrNull("path") ?: args.stringOrNull("destination")
     return listOf(rawToolName, target.orEmpty()).filter { it.isNotBlank() }.joinToString(" ")
 }
-
 /**
  * 任务文字是否要求落盘。主智能体漏传 write_paths 时，只读提示会与任务目标直接冲突，
  * 必须在 Lane 提示词与父汇总里都说清楚，而不是让子智能体在"要写"和"不许写"之间自行猜测。
@@ -256,7 +237,6 @@ internal fun declaresWriteIntent(taskPrompt: String): Boolean {
     return AMBIGUOUS_WRITE_INTENT_MARKERS.any { taskPrompt.contains(it, ignoreCase = true) } &&
         FILE_NAME_HINT.containsMatchIn(taskPrompt)
 }
-
 private val EXPLICIT_WRITE_INTENT_MARKERS = listOf(
     "落盘",
     "写入文件",
@@ -271,7 +251,6 @@ private val EXPLICIT_WRITE_INTENT_MARKERS = listOf(
     "write to file",
     "save to file",
 )
-
 private val AMBIGUOUS_WRITE_INTENT_MARKERS = listOf(
     "写入",
     "写到",
@@ -281,10 +260,8 @@ private val AMBIGUOUS_WRITE_INTENT_MARKERS = listOf(
     "输出到",
     "save to",
 )
-
 /** `report.md`、`Main.kt` 这类"名字.扩展名"token，用来给高频动词加上落盘目标的佐证。 */
 private val FILE_NAME_HINT = Regex("""[\w./\\-]+\.[A-Za-z0-9]{1,8}(?![\w.])""")
-
 /**
  * Lane 上下文预算治理。
  *
@@ -303,12 +280,10 @@ internal fun budgetedLaneMessages(
 ): List<HarnessMessage> {
     if (budgetTokens <= 0 || messages.isEmpty()) return messages
     if (estimateLaneTokens(messages) <= budgetTokens) return messages
-
     val calls = messages.filterIsInstance<ToolCall>().associateBy { it.id }
     val protectedResultIds = messages.filterIsInstance<ToolResult>()
         .takeLast(keepRecentResults.coerceAtLeast(0))
         .mapTo(mutableSetOf()) { it.id }
-
     fun mapResults(transform: (ToolResult) -> String): List<HarnessMessage> = messages.map { message ->
         if (message is ToolResult && message.id !in protectedResultIds) {
             message.copy(output = transform(message))
@@ -316,14 +291,12 @@ internal fun budgetedLaneMessages(
             message
         }
     }
-
     val compacted = mapResults { result ->
         val call = calls[result.toolCallId]
         val name = call?.let { it.rawToolName ?: HarnessApiMapper.apiName(it.tool) }
         ContextWindowPolicy.compactToolOutput(name, call?.args, result.output, result.success)
     }
     if (estimateLaneTokens(compacted) <= budgetTokens) return compacted
-
     return messages.map { message ->
         if (message !is ToolResult) return@map message
         val limit = if (message.id in protectedResultIds) {
@@ -334,10 +307,8 @@ internal fun budgetedLaneMessages(
         if (message.output.length <= limit) message else message.copy(output = message.output.take(limit) + TRUNCATION_NOTE)
     }
 }
-
 private const val TRUNCATION_NOTE =
     "\n…[子智能体上下文预算超限，工具输出已强制截断；需要细节请用更精确的参数（offset/limit、更窄的匹配）重新读取]"
-
 private fun estimateLaneTokens(messages: List<HarnessMessage>): Int = messages.sumOf { message ->
     when (message) {
         is UserMessage -> ContextWindowPolicy.estimateTokens(message.text)
@@ -347,7 +318,6 @@ private fun estimateLaneTokens(messages: List<HarnessMessage>): Int = messages.s
         else -> 0
     }
 }
-
 /**
  * 超时/中断后的阶段成果摘要。
  *
@@ -373,14 +343,12 @@ internal fun renderSubagentProgressDigest(transcript: List<HarnessMessage>): Str
         )
     }
     if (steps.isEmpty() && transcript.none { it is AssistantText }) return ""
-
     val succeeded = steps.count { it.success }
     val mutatedTargets = steps.filter { it.mutating && it.success && it.target.isNotBlank() }
         .map { it.target }
         .distinct()
     val lastFailure = steps.lastOrNull { !it.success }
     val lastProgress = transcript.filterIsInstance<AssistantText>().lastOrNull()?.text
-
     return buildString {
         appendLine("**阶段成果（超时前已完成的工作，续跑时请据此接续，不要从头重复）**")
         appendLine("- 已执行工具 ${steps.size} 次：成功 $succeeded / 失败 ${steps.size - succeeded}")
@@ -404,7 +372,6 @@ internal fun renderSubagentProgressDigest(transcript: List<HarnessMessage>): Str
         }
     }.trim()
 }
-
 internal fun buildSubagentTimeoutSummary(
     timeoutMs: Long,
     toolCallCount: Int,
@@ -424,7 +391,6 @@ internal fun buildSubagentTimeoutSummary(
         append("\n\n本次 Lane 标识：`").append(laneName).append("`。")
     }
 }
-
 private data class LaneStep(
     val toolName: String,
     val target: String,
@@ -432,7 +398,6 @@ private data class LaneStep(
     val output: String,
     val mutating: Boolean,
 )
-
 private val MUTATING_TOOLS = setOf(
     HarnessTool.WRITE,
     HarnessTool.EDIT,
@@ -441,21 +406,16 @@ private val MUTATING_TOOLS = setOf(
     HarnessTool.PROCESS,
     HarnessTool.HOST,
 )
-
 private fun JsonObject.stringOrNull(key: String): String? =
     (this[key] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() }
-
 /** 最近若干条工具结果不做语义压缩：模型正是靠它们决定下一步。 */
 private const val KEEP_RECENT_TOOL_RESULTS = 2
-
 private const val HARD_TRUNCATED_RESULT_CHARS = 800
-
 /**
  * 最近结果在硬截断档的上限。取值远大于 [HARD_TRUNCATED_RESULT_CHARS]：既保留足够的决策信息，
  * 又不让单条大文件读取独占整个 Lane 预算。
  */
 private const val PROTECTED_RESULT_MAX_CHARS = 16_000
-
 /**
  * 疑似 shell 写命令检测（对齐 Reasonix 的"运行后 host 对比凭据与租约"）：
  * 结构化写（write/edit/download）已有租约闸门，唯一盲区是 base/process 的 shell 写
@@ -506,3 +466,42 @@ private val SHELL_WRITE_HINTS = listOf(
 
 // 重定向：> 或 >>，排除 2>/&>（错误流抑制）；目标是否 /dev/null 由调用方判读
 private val REDIRECT_TARGET = Regex("""(^|[^0-9>&])>{1,2}\s*([^\s;&|]+)""")
+
+/**
+ * 未被接受为完成时的汇总正文：先说清为什么没完成，再交出可操作的交接信息，
+ * 最后附上子智能体的原始输出。父智能体据此能直接接手，而不是只看到一句"失败"。
+ */
+internal fun laneSummary(
+    verdict: SubagentConclusionVerdict,
+    roundText: String,
+    deferredApprovals: List<SubagentApprovalHandoff>,
+    blockedWrites: List<String>,
+    failedWrites: Map<String, String> = emptyMap(),
+): String {
+    if (verdict.accepted) return roundText
+    return buildString {
+        appendLine("⚠️ 子任务未确认完成：${verdict.reason}")
+        if (deferredApprovals.isNotEmpty()) {
+            appendLine()
+            appendLine("**需要主智能体在主会话重新发起并完成审批的调用**（后台 Lane 无法暂停等待审批）：")
+            deferredApprovals.forEach { handoff ->
+                appendLine("- `${handoff.toolName}` 参数：${handoff.argumentsJson}")
+            }
+        }
+        if (blockedWrites.isNotEmpty()) {
+            appendLine()
+            appendLine("**被写租约拦截、实际未落盘的写入**：${blockedWrites.joinToString("、")}")
+            appendLine("重新派发时请为该子任务声明 write_paths，或由主智能体自行写入。")
+        }
+        if (failedWrites.isNotEmpty()) {
+            appendLine()
+            appendLine("**未确认成功的写入目标**（可能已部分写入，请按各项说明核验）：")
+            failedWrites.forEach { (target, reason) -> appendLine("- $target → $reason") }
+        }
+        if (roundText.isNotBlank()) {
+            appendLine()
+            appendLine("子智能体最后输出：")
+            append(roundText)
+        }
+    }.trim()
+}

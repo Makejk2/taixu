@@ -262,7 +262,7 @@ class SubagentOrchestrator(
                     spec = spec,
                     subSessionId = "",
                     isSuccess = false,
-                    summary = routingFailure(spec),
+                    summary = routingFailureText(spec),
                     toolCallCount = 0,
                     termination = SubagentTermination.FAILED,
                 )
@@ -413,19 +413,13 @@ class SubagentOrchestrator(
         return subagentRepository.findEnabledProfile(selected.id)
     }
 
-    private fun routingFailure(spec: SubagentTaskSpec): String = if (spec.role.isNotBlank()) {
-        "精确角色 ${spec.role} 未配置或未启用。可改用 department + agentQuery 让本地索引派发。"
-    } else {
-        "部门 ${spec.department} 中没有匹配 agentQuery=\"${spec.agentQuery}\" 的已启用角色。请保留部门并改用 2–5 个更具体的英文专业关键词。"
-    }
-
     private suspend fun buildSubagentPrompt(
         spec: SubagentTaskSpec, profile: AgentSubagent,
         workspace: String, parentSessionId: String,
         readOnlyWriteIntent: Boolean,
     ): String {
         val factsPack = buildParentFactsPack(parentSessionId, workspace)
-        val writeLine = buildWriteLeaseLine(spec, readOnlyWriteIntent)
+        val writeLine = writeLeaseLine(spec, readOnlyWriteIntent)
         return promptAssets.render(
             "prompts/subagent_task.md",
             mapOf(
@@ -442,26 +436,6 @@ class SubagentOrchestrator(
     }
 
     /** 写租约约束文案：全新派发与续跑共用同一份语义（空=只读、精确路径=局部租约、["*"]=独占）。 */
-    private fun buildWriteLeaseLine(spec: SubagentTaskSpec, readOnlyWriteIntent: Boolean): String = when {
-        spec.writePaths.isEmpty() -> buildString {
-            append("本任务为只读任务：禁止调用 write/edit/download，禁止执行会修改工作区的命令；只返回分析或数据。")
-            append("write/edit/download 以及疑似 shell 写（重定向、sed -i、mv/rm/cp/tee 等）在本 Lane 内会被强制拦截。")
-            if (readOnlyWriteIntent) {
-                // 任务文字要求落盘却没有写租约：必须显式指出冲突，否则子智能体会在
-                // "要写"与"不许写"之间自行猜测，并可能把"没法写"当成完成。
-                append("\n注意：本任务文字提到了落盘/写入，但主智能体未声明 write_paths。")
-                append("请把需要落盘的完整内容直接放进结论正文（含目标路径与完整文件内容），")
-                append("由主智能体写入；不要声称文件已生成。")
-            }
-        }
-        spec.writePaths.any(::isWholeWorkspaceWritePath) ->
-            "本任务持有整工作区独占写租约；仅修改任务确实需要的文件，避免无关改动。"
-        else -> buildString {
-            append("限定写入范围（write/edit/download 会强制校验，越界写入直接拦截）：")
-            append(spec.writePaths.joinToString("、"))
-            append("。base/process 的 shell 写无法静态核验路径，必须遵守同一范围；越界疑似写入会在汇总中提示复核。")
-        }
-    }
 
     /**
      * 续跑指令：Lane 已持有原任务的完整上下文（角色提示词、任务原文、前序工具记录），
@@ -476,7 +450,7 @@ class SubagentOrchestrator(
             append("【任务续跑】原任务「${spec.taskName}」未完结，主智能体要求在本 Lane 已有工作基础上继续：\n")
             append(spec.prompt.trim())
             append("\n\n")
-            append(buildWriteLeaseLine(spec, readOnlyWriteIntent))
+            append(writeLeaseLine(spec, readOnlyWriteIntent))
             if (factsPack.isNotBlank()) append("\n\n$factsPack")
         }
     }
@@ -671,11 +645,6 @@ internal fun normalizeWritePath(path: String): String {
 
 private enum class SubagentWaveKind { READ_ONLY, SCOPED_WRITE, WHOLE_WORKSPACE }
 
-private fun waveLeaseDescription(wave: List<SubagentTaskSpec>): String = when {
-    wave.all { it.writePaths.isEmpty() } -> "read-only"
-    wave.any { it.writePaths.any(::isWholeWorkspaceWritePath) } -> "whole-workspace exclusive"
-    else -> "scoped disjoint write paths"
-}
 
 /**
  * 是否为整工作区租约。`*` 与 `.` 都表示整个工作区；`.` 归一化后为空串，
@@ -798,6 +767,7 @@ private fun subagentTerminationLabel(termination: SubagentTermination): String =
     SubagentTermination.INCOMPLETE -> "收场但未产出可信结论"
     SubagentTermination.NEEDS_APPROVAL -> "有需要审批的操作未执行"
     SubagentTermination.WRITE_SCOPE_BLOCKED -> "写入被写租约拦截"
+    SubagentTermination.POLICY_PAUSED -> "用户规则暂停：任务保留，未执行受限动作"
     SubagentTermination.WRITE_FAILED -> "写入未确认成功，需核验实际状态"
     SubagentTermination.UNPARSEABLE_TOOL_CALL -> "文本工具调用无法解析"
     SubagentTermination.MAX_ROUNDS -> "用尽工具轮数预算"

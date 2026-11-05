@@ -163,15 +163,15 @@ class SkillInstallationManager(
         // otherwise traverse a linked directory before discovering the escape.
         java.nio.file.Files.walk(root).use { stream ->
             val paths = stream.iterator()
-            val files = mutableListOf<java.nio.file.Path>()
+            val collected = mutableListOf<java.nio.file.Path>()
             while (paths.hasNext()) {
                 val path = paths.next()
                 check(!java.nio.file.Files.isSymbolicLink(path)) { "技能目录含符号链接" }
                 if (java.nio.file.Files.isDirectory(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue
                 check(java.nio.file.Files.isRegularFile(path, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { "技能目录含特殊文件" }
-                files += path
+                collected.add(path)
             }
-            files.sortedBy { root.relativize(it).toString() }.forEach { path ->
+            collected.sortedBy { root.relativize(it).toString() }.forEach { path ->
                 val relative = root.relativize(path).joinToString("/").toByteArray(Charsets.UTF_8)
                 digest.update(java.nio.ByteBuffer.allocate(4).putInt(relative.size).array())
                 digest.update(relative)

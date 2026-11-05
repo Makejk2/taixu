@@ -54,7 +54,6 @@ class SettingsDataStore(
     private val browserAllowVConsoleKey = BrowserPreferencesKeys.AllowVConsole
     private val browserDesktopUserAgentKey = BrowserPreferencesKeys.DesktopUserAgent
     private val browserMaxCaptureBytesKey = BrowserPreferencesKeys.MaxCaptureBytes
-
     val browserDefaultFamily: Flow<String> = context.settingsDataStore.data.map { it[browserDefaultFamilyKey].orEmpty() }
     suspend fun setBrowserDefaultFamily(value: String) { context.settingsDataStore.edit { it[browserDefaultFamilyKey] = value } }
     val browserHomeUrl: Flow<String> = context.settingsDataStore.data.map { it[browserHomeUrlKey].orEmpty() }
@@ -75,14 +74,12 @@ class SettingsDataStore(
     suspend fun setBrowserDesktopUserAgent(value: Boolean) { context.settingsDataStore.edit { it[browserDesktopUserAgentKey] = value } }
     val browserMaxCaptureBytes: Flow<Int> = context.settingsDataStore.data.map { it[browserMaxCaptureBytesKey] ?: (6 * 1024 * 1024) }
     suspend fun setBrowserMaxCaptureBytes(value: Int) { context.settingsDataStore.edit { it[browserMaxCaptureBytesKey] = value } }
-
     // ===== MCP 被控端（外部 AI 客户端控制本 App）偏好：数据源 =====
     private val agentServerEnabledKey = AgentServerPreferencesKeys.Enabled
     private val agentServerPortKey = AgentServerPreferencesKeys.Port
     private val agentServerAllowRemoteKey = AgentServerPreferencesKeys.AllowRemote
     private val agentServerTokenKey = AgentServerPreferencesKeys.Token
     private val agentServerAllowWriteToolsKey = AgentServerPreferencesKeys.AllowWriteTools
-
     val agentServerEnabled: Flow<Boolean> = context.settingsDataStore.data.map { it[agentServerEnabledKey] ?: false }
     suspend fun setAgentServerEnabled(value: Boolean) { context.settingsDataStore.edit { it[agentServerEnabledKey] = value } }
     val agentServerPort: Flow<Int> = context.settingsDataStore.data.map { it[agentServerPortKey] ?: AgentServerPreferences.DEFAULT_PORT }
@@ -102,8 +99,6 @@ class SettingsDataStore(
     }
     val agentServerAllowWriteTools: Flow<Boolean> = context.settingsDataStore.data.map { it[agentServerAllowWriteToolsKey] ?: false }
     suspend fun setAgentServerAllowWriteTools(value: Boolean) { context.settingsDataStore.edit { it[agentServerAllowWriteToolsKey] = value } }
-
-
     val workshopAndroidSdkPath: Flow<String> = context.settingsDataStore.data.map { it[workshopAndroidSdkPathKey].orEmpty() }
     val workshopNdkPath: Flow<String> = context.settingsDataStore.data.map { it[workshopNdkPathKey].orEmpty() }
     val workshopFlutterSdkPath: Flow<String> = context.settingsDataStore.data.map { it[workshopFlutterSdkPathKey].orEmpty() }
@@ -130,7 +125,6 @@ class SettingsDataStore(
     suspend fun setWorkshopToolDir(value: String) = setWorkshopValue(workshopToolDirKey, value)
     suspend fun setWorkshopAndroidScript(value: String) = setWorkshopValue(workshopAndroidScriptKey, value)
     suspend fun setWorkshopFlutterScript(value: String) = setWorkshopValue(workshopFlutterScriptKey, value)
-
     /** 签名注册表（解密后的明文记录，仅本机内存中使用）。解密失败视为空表。 */
     val workshopKeystores: Flow<List<WorkshopKeystore>> = context.settingsDataStore.data.map { prefs ->
         val ciphertext = prefs[workshopKeystoresKey]
@@ -140,7 +134,6 @@ class SettingsDataStore(
             WorkshopKeystoreCodec.decode(secretManager.decrypt(ciphertext))
         }
     }
-
     suspend fun setWorkshopKeystores(value: List<WorkshopKeystore>) {
         context.settingsDataStore.edit { prefs ->
             val current = prefs[workshopKeystoresKey]
@@ -156,7 +149,6 @@ class SettingsDataStore(
             }
         }
     }
-
     suspend fun resetWorkshopEnvironment() {
         context.settingsDataStore.edit {
             it.remove(workshopAndroidSdkPathKey)
@@ -172,11 +164,9 @@ class SettingsDataStore(
             it.remove(workshopToolDirKey)
         }
     }
-
     suspend fun resetWorkshopScripts() {
         context.settingsDataStore.edit { it.remove(workshopAndroidScriptKey); it.remove(workshopFlutterScriptKey) }
     }
-
     private suspend fun setWorkshopValue(key: Preferences.Key<String>, value: String) {
         context.settingsDataStore.edit { prefs -> if (value.isBlank()) prefs.remove(key) else prefs[key] = value }
     }
@@ -207,26 +197,21 @@ class SettingsDataStore(
     private val agentUserNameKey = stringPreferencesKey("agent_user_name")
     private val legacyEnvironmentVariablesKey = stringPreferencesKey("environment_variables_json")
     private val environmentPrivacyModeKey = booleanPreferencesKey("environment_privacy_mode")
-
     /** 对话结束后自动建议「沉淀新技能 / 修复既有技能」（自进化闭环） */
     private val skillEvolutionSuggestionsKey = booleanPreferencesKey("skill_evolution_suggestions")
     /** 已忽略或已应用的技能进化建议 id 集合（防止杀进程后重复展示） */
     private val dismissedSkillSuggestionsKey = stringSetPreferencesKey("dismissed_skill_suggestions")
     private val environmentJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     val environmentPrivacyMode: Flow<Boolean> = context.settingsDataStore.data.map { it[environmentPrivacyModeKey] ?: true }
-
     /** 对话结束后自动建议「沉淀新技能 / 修复既有技能」（自进化闭环） */
     val skillEvolutionSuggestions: Flow<Boolean> = context.settingsDataStore.data.map { it[skillEvolutionSuggestionsKey] ?: true }
-
     suspend fun setSkillEvolutionSuggestions(enabled: Boolean) {
         context.settingsDataStore.edit { it[skillEvolutionSuggestionsKey] = enabled }
     }
-
     /** 已忽略或已应用的技能进化建议 id 集合流（持久化） */
     val dismissedSkillSuggestions: Flow<Set<String>> = context.settingsDataStore.data.map {
         it[dismissedSkillSuggestionsKey].orEmpty()
     }
-
     /** 记录已忽略或已应用的技能建议 id（持久化落盘，且限制最大容量防止无限膨胀） */
     suspend fun dismissSkillSuggestion(id: String) {
         val trimmed = id.trim()
@@ -243,11 +228,9 @@ class SettingsDataStore(
             }
         }
     }
-
     suspend fun setEnvironmentPrivacyMode(enabled: Boolean) {
         context.settingsDataStore.edit { it[environmentPrivacyModeKey] = enabled }
     }
-
     /** Upgrade-only reader. Runtime deletes this Android-side copy after Linux persistence succeeds. */
     suspend fun readLegacyEnvironmentVariables(): List<LegacyEnvironmentVariable> {
         val encoded = context.settingsDataStore.data.map { it[legacyEnvironmentVariablesKey] }.first().orEmpty()
@@ -261,57 +244,44 @@ class SettingsDataStore(
             )
         }
     }
-
     suspend fun clearLegacyEnvironmentVariables() {
         context.settingsDataStore.edit { it.remove(legacyEnvironmentVariablesKey) }
     }
-
     @Serializable
     private data class StoredEnvironmentVariable(
         val metadata: EnvironmentVariable,
         val encryptedValue: String,
     )
-
-
     val customSystemPromptEnabled: Flow<Boolean> = context.settingsDataStore.data.map { it[customSystemPromptEnabledKey] ?: false }
-
     suspend fun setCustomSystemPromptEnabled(enabled: Boolean) {
         context.settingsDataStore.edit { preferences ->
             preferences[customSystemPromptEnabledKey] = enabled
         }
     }
-
     val customSystemPrompt: Flow<String> = context.settingsDataStore.data.map { it[customSystemPromptKey].orEmpty() }
-
     suspend fun setCustomSystemPrompt(prompt: String) {
         context.settingsDataStore.edit { preferences ->
             preferences[customSystemPromptKey] = prompt
         }
     }
-
     /** 模型自称（{{char}} 宏与默认提示词人设名），空串回退默认。 */
     val agentCharName: Flow<String> = context.settingsDataStore.data.map { it[agentCharNameKey].orEmpty().ifBlank { DEFAULT_AGENT_CHAR_NAME } }
-
     suspend fun setAgentCharName(name: String) {
         context.settingsDataStore.edit { preferences ->
             preferences[agentCharNameKey] = name.trim()
         }
     }
-
     /** 模型对用户的称呼（{{user}}/{{nickname}} 宏），空串回退默认。 */
     val agentUserName: Flow<String> = context.settingsDataStore.data.map { it[agentUserNameKey].orEmpty().ifBlank { DEFAULT_AGENT_USER_NAME } }
-
     suspend fun setAgentUserName(name: String) {
         context.settingsDataStore.edit { preferences ->
             preferences[agentUserNameKey] = name.trim()
         }
     }
-
     /** 实际生效模式；高权限失效时可临时回落为 PRoot。 */
     val effectiveExecutionMode: Flow<ExecutionMode> = context.settingsDataStore.data.map { preferences ->
         ExecutionMode.fromId(preferences[executionModeKey] ?: ExecutionMode.PROOT.id)
     }
-
     /** 用户最后一次成功选择的模式；缺少新键时从旧 execution_mode 无损迁移。 */
     val preferredExecutionMode: Flow<ExecutionMode> = context.settingsDataStore.data.map { preferences ->
         ExecutionMode.fromId(
@@ -320,21 +290,17 @@ class SettingsDataStore(
                 ?: ExecutionMode.PROOT.id,
         )
     }
-
     /** 兼容旧消费者：executionMode 始终表示实际生效模式。 */
     val executionMode: Flow<ExecutionMode> = effectiveExecutionMode
-
     suspend fun setExecutionMode(mode: ExecutionMode) {
         context.settingsDataStore.edit { preferences ->
             preferences[executionModeKey] = mode.id
             preferences[preferredExecutionModeKey] = mode.id
         }
     }
-
     suspend fun setPreferredExecutionMode(mode: ExecutionMode) {
         context.settingsDataStore.edit { it[preferredExecutionModeKey] = mode.id }
     }
-
     suspend fun setEffectiveExecutionMode(mode: ExecutionMode) {
         context.settingsDataStore.edit { it[executionModeKey] = mode.id }
     }

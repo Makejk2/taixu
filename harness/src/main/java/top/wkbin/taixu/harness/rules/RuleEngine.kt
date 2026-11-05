@@ -60,7 +60,8 @@ object RuleCodec {
         require(row.id.matches(Regex("custom:[A-Za-z0-9_.-]{1,96}"))) { "builtin_or_invalid_id" }
         require(row.priority in -1000..1000 && row.revision > 0)
         require(row.scope in setOf("global", "session", "workspace"))
-        require(if (row.scope == "global") row.scopeId == null else !row.scopeId.isNullOrBlank() && row.scopeId.length <= 1024)
+        val scopeId = row.scopeId
+        require(if (row.scope == "global") scopeId == null else !scopeId.isNullOrBlank() && scopeId.length <= 1024)
         decode(row.content)
     }
 }

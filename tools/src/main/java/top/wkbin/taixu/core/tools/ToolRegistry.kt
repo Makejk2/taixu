@@ -1,9 +1,9 @@
 package top.wkbin.taixu.core.tools
-
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
+import kotlinx.coroutines.CancellationException
 import top.wkbin.taixu.core.common.logging.AppLogger
 import top.wkbin.taixu.core.common.result.AppError
 import top.wkbin.taixu.core.common.result.AppResult
@@ -14,8 +14,6 @@ import top.wkbin.taixu.plugin.packages.WebPluginPackagePolicy
 import top.wkbin.taixu.plugin.packages.SemanticVersion
 import java.io.ByteArrayOutputStream
 import java.io.File
-
-
 import java.io.InputStream
 import java.io.IOException
 import java.util.zip.ZipEntry
@@ -112,10 +110,10 @@ class ToolRegistry(
             currentCoroutineContext().ensureActive()
             check(authorize()) { "目录更新原生授权或配置已改变" }
             commitPersistedRegistry(staging)
-            AppResult.Success(manifests.size)
+            return AppResult.Success(manifests.size)
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (throwable: Throwable) {
-            AppResult.Failure(
+            return AppResult.Failure(
                 AppError(
                     code = if (throwable is SecurityException) ErrorCode.SECURITY else ErrorCode.NETWORK,
                     message = "工具清单更新失败：${throwable.message ?: "未知错误"}",

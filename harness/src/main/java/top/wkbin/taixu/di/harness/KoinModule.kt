@@ -94,18 +94,14 @@ import org.koin.core.qualifier.named
 import top.wkbin.taixu.harness.diagnostics.RequestDiagnosticsStore
 import top.wkbin.taixu.harness.session.InteractiveSessionControl
 import top.wkbin.taixu.harness.session.SessionControl
-
 /** 被控端（独立 MCP server）在 Koin 中的限定符：与浏览器自环的默认定义互不覆盖。 */
 private const val AGENT_MCP_DISPATCHER = "agentMcpToolDispatcher"
 private const val AGENT_MCP_RUNTIME = "agentMcpServerRuntime"
-
 /** Dependency registrations owned by the harness module. */
 val harnessModule = module {
     phoneWorkflowDefinitions()
     single<BrowserMcpResources> { provideBrowserMcpResources(registry = get()) }
-
     single<BrowserMcpTools> { provideBrowserMcpTools(registry = get(), browserPrefs = get()) }
-
     single<AgentContextExecutor> { AgentContextExecutor(agentContextDao = get(), json = get()) }
 
     single<ApprovalPolicyEngine> { ApprovalPolicyEngine(pathResolver = get()) }

@@ -40,14 +40,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
-
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import android.net.Uri
 import top.wkbin.taixu.core.common.result.AppResult
-
 class ToolManager(
     private val toolRepository: ToolRepository,
     private val installLogRepository: InstallLogRepository,
@@ -77,12 +75,10 @@ class ToolManager(
     val installProgress: StateFlow<Map<String, ToolInstallProgress>> = _installProgress.asStateFlow()
     private val _verifications = MutableStateFlow<Map<String, ToolVerification>>(emptyMap())
     val verifications: StateFlow<Map<String, ToolVerification>> = _verifications.asStateFlow()
-
     private val _bundleInstallState = MutableStateFlow<String?>(null)
     val bundleInstallState: StateFlow<String?> = _bundleInstallState.asStateFlow()
     private val _bundleInstallLog = MutableStateFlow<List<String>>(emptyList())
     val bundleInstallLog: StateFlow<List<String>> = _bundleInstallLog.asStateFlow()
-
     private val _isBatchInstalling = MutableStateFlow(false)
     val isBatchInstalling: StateFlow<Boolean> = _isBatchInstalling.asStateFlow()
     private val bundleBatch = BundleComponentBatch(
@@ -101,13 +97,10 @@ class ToolManager(
         currentDistroId = ::currentDistroId,
         probeInstalledComponents = ::probeInstalledComponents,
     )
-
     private val _localPluginImportState = MutableStateFlow<LocalPluginImportState>(LocalPluginImportState.Idle)
     val localPluginImportState: StateFlow<LocalPluginImportState> = _localPluginImportState.asStateFlow()
     private var localPluginImportJob: Job? = null
-
     private val staticInstallerById = installerAdapters.associateBy { it.toolId }
-
     init {
         // Keep the latest bundle log available after a tab/activity recreation.
         managerScope.launch {
@@ -120,10 +113,8 @@ class ToolManager(
             }
         }
     }
-
     /** 当前发行版（安装/卸载/验证等操作的作用目标系统）。 */
     private fun currentDistroId(): String = linuxRuntime.activeDistroId.value
-
     /** 插件状态按当前发行版隔离：切换系统后自动切换为该系统的安装状态。 */
     @OptIn(ExperimentalCoroutinesApi::class)
     fun observeTools(): Flow<List<ToolEntity>> =
@@ -132,10 +123,8 @@ class ToolManager(
                 list.filterNot { it.id in ToolRegistry.REMOVED_TOOL_IDS }
             }
         }
-
     /** Expose manifest metadata for detail screens. */
     fun manifest(toolId: String): ToolManifest? = toolRepository.manifest(toolId)
-
     suspend fun importLocalPlugin(
         uri: Uri,
         expected: ToolManifest? = null,
@@ -146,7 +135,6 @@ class ToolManager(
         if (result is AppResult.Success) syncRegistry()
         return result
     }
-
     /** Read and validate package metadata; no extraction or registry mutation occurs yet. */
     @Synchronized
     fun startLocalPluginImport(uri: Uri, fileName: String, requireAvailable: Boolean = false): Job {
@@ -174,7 +162,6 @@ class ToolManager(
             }
         }.also { localPluginImportJob = it }
     }
-
     /** Confirm a previously previewed package and perform extraction/registration. */
     @Synchronized
     fun confirmLocalPluginImport(): Job? {
@@ -244,7 +231,6 @@ class ToolManager(
             }
         }.also { localPluginImportJob = it }
     }
-
     fun cancelLocalPluginImport() {
         if (_localPluginImportState.value is LocalPluginImportState.PendingConfirmation) {
             _localPluginImportState.value = LocalPluginImportState.Idle

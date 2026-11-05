@@ -483,8 +483,6 @@ class HostActionNodeExecutor(
     private fun requireInt(raw: String, name: String): Int =
         raw.toIntOrNull() ?: error("$name 必须是整数")
 
-    private fun parseBool(raw: String): Boolean =
-        raw.equals("true", true) || raw == "1" || raw.equals("on", true) || raw.equals("yes", true)
 
     private fun parseExtras(raw: String): Map<String, String> = raw.lines()
         .map { it.trim() }
@@ -495,23 +493,6 @@ class HostActionNodeExecutor(
         }.toMap()
 
     private fun amExtras(extras: Map<String, String>): String = buildString {
-        extras.forEach { (rawKey, value) ->
-            val parts = rawKey.split(':', limit = 2)
-            val (key, type) = when {
-                parts.size == 2 && parts[1] in setOf("int", "long", "bool", "boolean", "float", "uri", "string") ->
-                    parts[0] to parts[1]
-                parts.size == 2 && parts[0] in setOf("int", "long", "bool", "boolean", "float", "uri", "string") ->
-                    parts[1] to parts[0]
-                else -> rawKey to "string"
-            }
-            when (type) {
-                "int" -> append(" --ei ${ShellQuote.of(key)} ${value.toInt()}")
-                "long" -> append(" --el ${ShellQuote.of(key)} ${value.toLong()}")
-                "bool", "boolean" -> append(" --ez ${ShellQuote.of(key)} ${parseBool(value)}")
-                "float" -> append(" --ef ${ShellQuote.of(key)} ${value.toFloat()}")
-                "uri" -> append(" --eu ${ShellQuote.of(key)} ${ShellQuote.of(value)}")
-                else -> append(" --es ${ShellQuote.of(key)} ${ShellQuote.of(value)}")
-            }
-        }
+        appendExtras(extras)
     }
 }

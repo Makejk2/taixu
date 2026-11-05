@@ -72,7 +72,8 @@ internal fun appAdminLocalRunSupported(workspace: String, targetJson: String?, n
         Json.decodeFromString<SessionExecutionTarget>(targetJson ?: return false).also { it.validate() }
     }.getOrNull() ?: return false
     // 远程目标只认冻结连接本身；本地目标仍必须等于已就绪发行版，绝不回退到当前活动目标。
-    val validOwner = if (target.remote != null) target.remote.distributionId == target.distribution
+    val frozen = target.remote
+    val validOwner = if (frozen != null) frozen.distributionId == target.distribution
         else target.distribution == native.localDistributionId
     return validOwner && target.workspace == workspace &&
         workspace.startsWith("/") && workspace.split('/').none { it == "." || it == ".." } && !workspace.contains('\u0000')
